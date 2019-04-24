@@ -1,0 +1,119 @@
+#### simulate distribution ####
+## Written by Virginia Morera-Pujol (2019)
+
+
+# Tracks must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
+# PopulationInfo must be a data frame with at least Colony, Sp and Pairs
+# Scale is the smoothing factor to be used in the Kernel Density Estimation (in Km)
+# Grid is a number giving the size of the grid on which the UD should be estimated. 
+# multi_factor is the number by which we want to multiply each population (i.e. simulate that number of positions from each animal). The higher the number, the larger the resulting point pattern
+
+
+simulateDistribution <- function(Tracks, PopulationInfo, Scale, Grid = 500, MultiFactor = 5){
+  
+  # Tracks <- colony_boot_list[[2]] #this can be used for testing if something goes wrong
+  require(adehabitatHR)
+  require(sp)
+  require(spatstat, quietly = T)
+  require(geosphere)
+  
+  if (!"Latitude" %in% names(Tracks)) stop("Latitude field does not exist")
+  if (!"Longitude" %in% names(Tracks)) stop("Longitude field does not exist")
+  if (!"Species" %in% names(Tracks)) stop("Species field does not exist")
+  if (!"Population" %in% names(Tracks)) stop("Population field does not exist")
+  
+  # Convert Tracks to spatial dataframe and project them, or check projection if already SPDF (and if already is SPDF it accepts this)
+  if (class(Tracks) != "SpatialPointsDataFrame")     ## convert to SpatialPointsDataFrame and project
+  {
+    ## filter DF to the minimum fields that are needed
+    CleanTracks <- Tracks %>%
+      dplyr::select(Species, Population, Latitude, Longitude)
+    mid_point <- data.frame(centroid(cbind(CleanTracks$Longitude, CleanTracks$Latitude)))
+    
+    ### PREVENT PROJECTION PROBLEMS FOR DATA SPANNING DATELINE
+    if (min(CleanTracks$Longitude) < -170 &  max(CleanTracks$Longitude) > 170) {
+      longs = ifelse(CleanTracks$Longitude < 0,CleanTracks$Longitude + 360,CleanTracks$Longitude)
+      mid_point$lon <- ifelse(median(longs) > 180,median(longs) - 360,median(longs))}
+    
+    Tracks.Wgs <- SpatialPoints(data.frame(CleanTracks$Longitude, CleanTracks$Latitude), proj4string = CRS("+proj=longlat + datum=wgs84"))
+    proj.UTM <- CRS(paste("+proj=laea +lon_0=", mid_point$lon, " +lat_0=", mid_point$lat, sep = ""))
+    Tracks.Projected <- spTransform(Tracks.Wgs, CRS = proj.UTM )
+    TracksSpatial <- SpatialPointsDataFrame(Tracks.Projected, data = CleanTracks)
+    TracksSpatial@data <- TracksSpatial@data %>% dplyr::select(Species, Population, Latitude, Longitude)
+    Tracks.Wgs <- NULL
+    Tracks.Projected <- NULL
+    
+  }else {## if data are already in a SpatialPointsDataFrame then check for projection
+    
+    if (is.na(Tracks@proj4string)) stop("proj4string slot can't be NA. Assign the correct CRS object")
+    
+    if (is.projected(Tracks)) {
+      TracksSpatial@data <- TracksSpatial@data %>% dplyr::select(Species, Population, Latitude, Longitude)
+    }else {## project data to UTM if not projected
+      mid_point <- data.frame(centroid(cbind(Tracks@data$Longitude, Tracks@data$Latitude)))
+      
+      ### MB  This part prevents projection problems around the DATELINE 
+      if (min(Tracks@data$Longitude) < -170 &  max(Tracks@data$Longitude) > 170) {
+        longs = ifelse(Tracks@data$Longitude < 0, Tracks@data$Longitude + 360, Tracks@data$Longitude)
+        mid_point$lon <- ifelse(median(longs) > 180, median(longs) - 360, median(longs))}
+      
+      proj.UTM <- CRS(paste("+proj=laea +lon_0=", mid_point$lon, " +lat_0=", mid_point$lat, sep = ""))
+      TracksSpatial <- spTransform(Tracks, CRS = proj.UTM)
+      TracksSpatial@data <- TracksSpatial@data %>% dplyr::select(GroupVar, tripID, Latitude, Longitude)
+    }
+  }
+
+  map <- rworldmap::getMap(resolution = "coarse")
+  map <- spTransform(map, TracksSpatial@proj4string)
+  # generate kernel
+  Kernel.est <- kernelUD(TracksSpatial,  h = Scale*1000, grid = Grid)
+  
+  # convert to pixel image
+  r <- raster(as(Kernel.est, "SpatialPixelsDataFrame"))
+  # raster.as.im function from Jeffrey Evans answer here: https://bit.ly/2TI0FXB
+  raster.as.im <- function(im) {
+    r <- raster::res(im)
+    orig <- sp::bbox(im)[, 1] + 0.5 * r
+    dm <- dim(im)[2:1]
+    xx <- unname(orig[1] + cumsum(c(0, rep(r[1], dm[1] - 1))))
+    yy <- unname(orig[2] + cumsum(c(0, rep(r[2], dm[2] - 1))))
+    return(spatstat::im(matrix(raster::values(im), ncol = dm[1], 
+                               nrow = dm[2], byrow = TRUE)[dm[2]:1, ], 
+                        xcol = xx, yrow = yy))
+  }
+  kernel.im <- raster.as.im(r)
+  
+  # select colony size info
+  SPopulation <- as.character(unique(Tracks$Population))
+  SSpecies <- as.character(unique(Tracks$Species))
+  Pop.size <- PopulationInfo[PopulationInfo$Species == SSpecies & PopulationInfo$Population == SPopulation,]$Pairs*2
+  
+  # we're going to simulate a nº of points equal to the pop size * multi_factor
+  SimulateN <- Pop.size*MultiFactor
+  
+  # this simulates the points as ppp
+  SimPoints <- rpoint(SimulateN, kernel.im)
+  
+  # convert to dataframe, and from there to Spatial points
+  SimPoints.df <- as.data.frame(SimPoints)
+  SimPoints.sp <- SimPoints.df
+  coordinates(SimPoints.sp) <- ~ x+y
+  
+  # plot to see everything has worked
+  par(mfrow = c(1,2))
+  plot(kernel.im, main = SPopulation, xlim = SimPoints.sp@bbox[1,], ylim = SimPoints.sp@bbox[2,])
+  plot(map, add = T, border = "white")
+  # plot(kernel.im, main = SPopulation)
+  plot(SimPoints.sp, pch = 20, col = "#ff000030", cex = 0.3)
+  plot(map, add = T, border = "black")
+  
+  par(mfrow = c(1,1))
+  
+  # prepare output
+  SimPoints.sp <- SpatialPointsDataFrame(coords = SimPoints.sp@coords, 
+                                         data = data.frame(Population = rep(SPopulation, length(SimPoints.sp)), 
+                                                           Species = rep(SSpecies, length(SimPoints.sp))),
+                                         proj4string = proj.UTM)
+  SimPoints.sp <- spTransform(SimPoints.sp, CRS(projections$WGS84))
+  return(SimPoints.sp)
+}
