@@ -1,4 +1,4 @@
-# Tracking_data_analysis
+# Tracking data analysis
 Functions from the paper 
 
 **Detecting recurrent sources of variability in animal tracking studies** 
