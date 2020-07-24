@@ -2,14 +2,15 @@
 ## Written by Virginia Morera-Pujol (2019)
 
 
-# Tracks must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
-# PopulationInfo must be a data frame with at least Colony, Sp and Pairs
-# Scale is the smoothing factor to be used in the Kernel Density Estimation (in Km)
-# Grid is a number giving the size of the grid on which the UD should be estimated. 
-# multi_factor is the number by which we want to multiply each population (i.e. simulate that number of positions from each animal). The higher the number, the larger the resulting point pattern
+# 
+must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
+# populationInfo must be a data frame with at least Colony, Sp and Pairs
+# scale is the smoothing factor to be used in the Kernel Density Estimation (in Km)
+# grid is a number giving the size of the grid on which the UD should be estimated. 
+# multiFactor is the number by which we want to multiply each population (i.e. simulate that number of positions from each animal). The higher the number, the larger the resulting point pattern
 
 
-simulateDistribution <- function(Tracks, PopulationInfo, Scale, Grid = 500, MultiFactor = 5){
+simulateDistribution <- function(tracks, populationInfo, scale, grid = 500, multiFactor = 5){
   
   # Tracks <- colony_boot_list[[2]] #this can be used for testing if something goes wrong
   require(adehabitatHR)
@@ -17,16 +18,16 @@ simulateDistribution <- function(Tracks, PopulationInfo, Scale, Grid = 500, Mult
   require(spatstat, quietly = T)
   require(geosphere)
   
-  if (!"Latitude" %in% names(Tracks)) stop("Latitude field does not exist")
-  if (!"Longitude" %in% names(Tracks)) stop("Longitude field does not exist")
-  if (!"Species" %in% names(Tracks)) stop("Species field does not exist")
-  if (!"Population" %in% names(Tracks)) stop("Population field does not exist")
+  if (!"Latitude" %in% names(tracks)) stop("Latitude field does not exist")
+  if (!"Longitude" %in% names(tracks)) stop("Longitude field does not exist")
+  if (!"Species" %in% names(tracks)) stop("Species field does not exist")
+  if (!"Population" %in% names(tracks)) stop("Population field does not exist")
   
   # Convert Tracks to spatial dataframe and project them, or check projection if already SPDF (and if already is SPDF it accepts this)
-  if (class(Tracks) != "SpatialPointsDataFrame")     ## convert to SpatialPointsDataFrame and project
+  if (class(tracks) != "SpatialPointsDataFrame")     ## convert to SpatialPointsDataFrame and project
   {
     ## filter DF to the minimum fields that are needed
-    CleanTracks <- Tracks %>%
+    CleanTracks <- tracks %>%
       dplyr::select(Species, Population, Latitude, Longitude)
     mid_point <- data.frame(centroid(cbind(CleanTracks$Longitude, CleanTracks$Latitude)))
     
@@ -66,7 +67,7 @@ simulateDistribution <- function(Tracks, PopulationInfo, Scale, Grid = 500, Mult
   map <- rworldmap::getMap(resolution = "coarse")
   map <- spTransform(map, TracksSpatial@proj4string)
   # generate kernel
-  Kernel.est <- kernelUD(TracksSpatial,  h = Scale*1000, grid = Grid)
+  Kernel.est <- kernelUD(TracksSpatial,  h = scale*1000, grid = grid)
   
   # convert to pixel image
   r <- raster(as(Kernel.est, "SpatialPixelsDataFrame"))
@@ -84,12 +85,12 @@ simulateDistribution <- function(Tracks, PopulationInfo, Scale, Grid = 500, Mult
   kernel.im <- raster.as.im(r)
   
   # select colony size info
-  SPopulation <- as.character(unique(Tracks$Population))
-  SSpecies <- as.character(unique(Tracks$Species))
-  Pop.size <- PopulationInfo[PopulationInfo$Species == SSpecies & PopulationInfo$Population == SPopulation,]$Pairs*2
+  SPopulation <- as.character(unique(tracks$Population))
+  SSpecies <- as.character(unique(tracks$Species))
+  Pop.size <- PopulationInfo[populationInfo$Species == SSpecies & populationInfo$Population == SPopulation,]$Pairs*2
   
   # we're going to simulate a nº of points equal to the pop size * multi_factor
-  SimulateN <- Pop.size*MultiFactor
+  SimulateN <- Pop.size*multiFactor
   
   # this simulates the points as ppp
   SimPoints <- rpoint(SimulateN, kernel.im)
