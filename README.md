@@ -1,5 +1,5 @@
 # Tracking data analysis
-Functions from the paper 
+Functions and code from the paper 
 
 **Detecting recurrent sources of variability in animal tracking studies** 
 Virginia Morera-Pujol et al. 2019 (in prep)
