@@ -1,0 +1,168 @@
+```{r setup, include=FALSE}
+list.of.packages <- c("sp", "geosphere", "rgdal", "adehabitatHR", "foreach", "doParallel", "parallel", "beepr",
+                      "tidyverse", "plyr", "knitr", "gridExtra", "lme4", "lmerTest",
+                      "rasterVis", "Cairo", "ggmap", "scales", "maptools", "raster", "rgeos", "mgcv", "broom.mixed", 
+                      "kableExtra", "jtools","metap", "fields", "viridis", "TeachingDemos", "latticeExtra", "Matching", 
+                      "MuMIn", "tidylog", "rsq", "robustbase")
+
+lapply(list.of.packages, require, character.only = T)
+remove(list.of.packages, new.packages)
+```
+
+## Generate individual kernels for each colony 
+```{r prepare data for plotting1, eval = TRUE}
+# Generate 50% KUD for each sp, pop and fase
+
+# colony_boot_list <- split(colony_boot_data, colony_boot_data$Colony)
+# all_kernels  <- lapply(colony_boot_list, batchUD, Scale = 186, UDLev = 95)
+# save(all_kernels, file = "all_kernels50.RData")
+
+load("all_kernels50.Rdata")
+```
+
+## Calculate, for a 1x1? raster, the no. of ind kernels in each cell (for each colony)
+
+This will require to unify all rasters so we can later add them up without problem
+```{r generate rasters}
+ras_all_sp <- lapply(all_kernels, polyCount, Res = 0.1) #polyCount funtion from Lascelles et al. 2012
+save(ras_all_sp, file = "ras_all_sp.Rdata")
+load("ras_all_sp.Rdata")
+## to unify all rasters and be able to work with them
+
+# create a list with all the extents of the rasters
+ext_list_br <- list()
+for (i in 1:length(ras_all_sp)) {
+  ext_list_br[i] <- list(ras_all_sp[[i]]@extent)
+}
+
+# convert list to a matrix
+extent_list <- lapply(ext_list_br, as.matrix)
+matrix_extent <- matrix(unlist(extent_list), ncol = length(extent_list))
+rownames(matrix_extent) <- c("xmin", "ymin", "xmax", "ymax")
+
+# create an extent with the extrem values of your extent
+best_extent <- extent(min(matrix_extent[1,]), max(matrix_extent[3,]), min(matrix_extent[2,]), max(matrix_extent[4,]))
+
+# generate new empty raster to resample all the rest
+new_ras <- raster(ext = best_extent, crs = ras_all_sp[[1]]@crs, resolution = 0.1)                      
+
+# resample all rasters
+ras_all_sp2 <- lapply(ras_all_sp, resample, new_ras)
+names(ras_all_sp2)
+
+# convert all empty cells to 0
+for (i in 1:length(ras_all_sp2)) {ras_all_sp2[[i]][is.na(ras_all_sp2[[i]])] <- 0}
+plot(ras_all_sp2[[1]])
+
+for (i in 1:length(ras_all_sp2)) {
+  # i = 1
+  (sumVal <- cellStats(ras_all_sp2[[i]], stat = sum))
+  temp <- ras_all_sp2[[i]]/sumVal
+  ras_all_sp2[[i]] <- temp}
+
+# convert all 0 cells to NA
+for (i in 1:length(ras_all_sp2)) {ras_all_sp2[[i]][ras_all_sp2[[i]] == 0] <- NA}
+```
+
+## Multiply each raster by its population size
+
+Up to this point we've generated a raster for each colony, with relative distribution of wintering positions, but where all cells add up to one. In this way, when we multiply it by each colony's size, we'll have a representation of the wintering distribution of the entire colony
+
+```{r multiply by pop size}
+# CALBOR
+ras_all_CALBOR <- list()
+for (i in seq_along(ras_all_sp2)) {
+  #i = 1
+  name_layer <- names(ras_all_sp2)[i]
+  if (PopulationInfo[PopulationInfo$Population == name_layer,2] == "CALBOR") {
+    tmp <- ras_all_sp2[[name_layer]]*PopulationInfo[PopulationInfo$Population == name_layer,3]*2
+    ras_all_CALBOR[i] <- list(tmp)
+    names(ras_all_CALBOR)[i] <- as.character(name_layer)}
+}
+
+ras_all_CALBOR <- ras_all_CALBOR[!sapply(ras_all_CALBOR, is.null)]
+names(ras_all_CALBOR) 
+
+stack_CALBOR <- raster::stack(ras_all_CALBOR)
+plot(stack_CALBOR, main = "All CALBOR")
+
+CALBOR <- sum(stack_CALBOR, na.rm = T)
+CALBOR[CALBOR == 0] <- NA
+plot(CALBOR, main = "Sum CALBOR")
+
+# CALDIO
+ras_all_CALDIO <- list()
+for (i in seq_along(ras_all_sp2)) {
+  #i = 1
+  name_layer <- names(ras_all_sp2)[i]
+  if (PopulationInfo[PopulationInfo$Population == name_layer,2] == "CALDIO") {
+    tmp <- ras_all_sp2[[name_layer]]*PopulationInfo[PopulationInfo$Population == name_layer,3]*2
+    # plot(tmp)
+    ras_all_CALDIO[i] <- list(tmp)
+    names(ras_all_CALDIO)[i] <- as.character(name_layer)}
+}
+
+ras_all_CALDIO <- ras_all_CALDIO[!sapply(ras_all_CALDIO, is.null)]
+names(ras_all_CALDIO) 
+
+stack_CALDIO <- raster::stack(ras_all_CALDIO)
+plot(stack_CALDIO, main = "All CALDIO")
+CALDIO <- sum(stack_CALDIO, na.rm = T)
+CALDIO[CALDIO == 0] <- NA
+plot(CALDIO, main = "Sum CALDIO")
+
+
+# CALEDW
+ras_all_CALEDW <- list()
+for (i in seq_along(ras_all_sp2)) {
+  #i = 1
+  name_layer <- names(ras_all_sp2)[i]
+  if (PopulationInfo[PopulationInfo$Population == name_layer,2] == "CALEDW") {
+    tmp <- ras_all_sp2[[name_layer]]*PopulationInfo[PopulationInfo$Population == name_layer,3]*2
+    # plot(tmp)
+    ras_all_CALEDW[i] <- list(tmp)
+    names(ras_all_CALEDW)[i] <- as.character(name_layer)}
+}
+
+ras_all_CALEDW <- ras_all_CALEDW[!sapply(ras_all_CALEDW, is.null)]
+names(ras_all_CALEDW) 
+
+stack_CALEDW <- stack(ras_all_CALEDW)
+plot(stack_CALEDW, main = "All CALEDW")
+CALEDW <- sum(stack_CALEDW, na.rm = T)
+CALEDW[CALEDW == 0] <- NA
+plot(CALEDW, main = "Sum CALEDW")
+```
+
+
+## Plot distributions for each species
+```{r plot distributions, eval = TRUE}
+# load colony coordinates for plotting
+col_coordinates <- read.csv("data/colonies_info_100km.csv")
+mapa.i <- rworldmap::getMap(resolution = "high")
+
+col_coordinates %>% 
+  filter(!is.na(Sample.Size)) %>% 
+  select(Species, Area, SampledColony, Longitude, Latitude) -> col_points
+
+names(col_points)[3] <- "Colony"
+# plotting specifications
+mapa.w <- spTransform(mapa.i, CRS(projections$WGS84))
+
+### CALBOR
+
+#only example code on how to generate 1 of the plots is showed
+col_points %>% 
+  filter(Species == "CALBOR") -> coords_calbor
+
+coordinates(coords_calbor) <- ~Longitude + Latitude
+
+CBR <- levelplot(CALBOR, col.regions = viridis(100), at = seq(0, max(CALBOR[], na.rm = T), length.out = 100),
+                 contour = F, margin = F, scales = list(draw = T, cex = 1.5), xlab = NULL, ylab = NULL,
+                 colorkey = list(labels = list(cex = 1.5)), 
+                 par.settings = list(axis.line = list(lwd = 2), strip.border = list(lwd = 2))) +
+  latticeExtra::layer(sp.polygons(mapa.w, lwd = 1, col = "darkgray", fill = "lightgray")) + 
+  latticeExtra::layer(sp.points(coords_calbor, pch = 23, fill = "hotpink2", col = "black", cex = 1.2)) + 
+  latticeExtra::layer(panel.text(10, 20, 'All colonies', cex = 1.5)) +
+  latticeExtra::layer(panel.text(-57, 57, 'a)', cex = 1.5)) 
+```
