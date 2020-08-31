@@ -2,8 +2,7 @@
 ## Written by Virginia Morera-Pujol (2019)
 
 
-# 
-must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
+# must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
 # populationInfo must be a data frame with at least Colony, Sp and Pairs
 # scale is the smoothing factor to be used in the Kernel Density Estimation (in Km)
 # grid is a number giving the size of the grid on which the UD should be estimated. 
