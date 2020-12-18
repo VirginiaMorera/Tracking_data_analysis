@@ -1,0 +1,73 @@
+---
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+# Simulating individual site fidelity
+
+## For the MS "Detecting recurrent sources of variability in animal tracking studies"
+
+### Description
+
+In this document I'll generate, using the package `SIMRiv`, simulated animal movement tracks to test the detection of Individual Site Fidelity by the test developed for the MS "Detecting recurrent sources of variability in animal tracking studies", by Virginia Morera-Pujol et al. (2020) 
+
+```{r setup, include = F}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
+                      fig.width = 12, fig.height = 8)
+knitr::opts_knit$set(root.dir = "D:/Dropbox/Virginia/GLS_multi/scripts")
+# setwd("D:/Dropbox/Virginia/GLS_multi")
+# setwd("C:/Users/Virginia/Dropbox/Virginia/GLS_multi")
+
+pacman::p_load("tidyverse", "plyr", "adehabitatHR", "Matching", "sf", "ctmm",
+               "geosphere", "RColorBrewer", "gridExtra", "lubridate", "SiMRiv")
+  
+'%!in%' <- function(x,y)!('%in%'(x,y))
+```
+
+
+First, simulate a correlated RW. We've tried to simulate a Lévy Walk but since ideally we're not using commuting points in our real-data analysis, CRW looks more similar to a real dataset
+```{r randomwalk demo, results = 'hide', message = FALSE, warning = FALSE}
+CRW15 <- species(state.CRW(0.25) + 7)
+simCRW <- simulate(CRW15, coords = matrix(rep(0, 2), ncol = 2), time = 10000)
+plot(simCRW[,1:2], type = "l", 
+     xlim = c(min(simCRW[,1]), max(simCRW[,1])), 
+     ylim = c(min(simCRW[,2]), max(simCRW[,2])), 
+     main = "Simulation of a correlated random walk with 10,000 steps")
+
+spSimCRW <- SpatialPoints(coords = simCRW[,1:2])
+```
+
+Now we generate a convex hull of that correlated RW
+```{r convexhull demo, results = 'hide', message = FALSE, warning = FALSE}
+example_MCP <- mcp(spSimCRW, percent = 100)
+plot(example_MCP, main = "100% Minimum convex polygon of the simulated CRW")
+plot(spSimCRW, add = T, pch = 20, cex = 0.5, col = "gray")
+```
+
+We convert this convex hull into a resistance surface from SiMRiv to limit distribution of newly simulated tracks
+```{r resistancesurface demo, message = FALSE, warning = FALSE}
+res_surface <- resistanceFromShape(example_MCP, res = 1, margin = c(500, 500))
+plot(res_surface, main = "Resistance surface generated from the previous MCP")
+```
+
+We now simulate tracks within the resistance shape
+```{r simulate demo,  message = FALSE, warning = FALSE}
+simCRW_res <- simulate(list(CRW15, CRW15, CRW15, CRW15), coords = matrix(rep(0, 8), 
+                                                                         ncol = 2), 
+                       time = 10000, resist = res_surface)
+spSimCRW_res <- SpatialPointsDataFrame(coords = cbind(c(simCRW_res[,1], simCRW_res[,4], 
+                                                        simCRW_res[,7], simCRW_res[,10]),
+                                                      c(simCRW_res[,2], simCRW_res[,5], 
+                                                        simCRW_res[,8], simCRW_res[,11])),
+                                       data = data.frame(ID = c(rep(1, 10000), 
+                                                                rep(2, 10000), 
+                                                                rep(3, 10000),
+                                                                rep(4, 10000))))
+
+plot(res_surface, 
+     main = "Simulated tracks within the MCP \nthrough the resistance surface")
+plot(spSimCRW_res, pch = 20, cex = 0.5, add = T, col = spSimCRW_res$ID)
+```
+
+This is the basic workflow to generate simulated datasets displaying individual site fidelity. Different levels of fidelity can be simulated by changing the resistance values outside the MCP. The higher the resistance, the more intense the "fidelity". We are going to use it to generate different types of data to test aspects of the indEffectTest function developed for the manuscript.
