@@ -15,19 +15,19 @@ In this document I'll generate, using the package `SIMRiv`, simulated animal mov
 ```{r setup, include = F}
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
                       fig.width = 12, fig.height = 8)
-knitr::opts_knit$set(root.dir = "D:/Dropbox/Virginia/GLS_multi/scripts")
+knitr::opts_knit$set(root.dir = "C:/Users/Virginia/Dropbox/Virginia/GLS_multi/scripts")
 # setwd("D:/Dropbox/Virginia/GLS_multi")
 # setwd("C:/Users/Virginia/Dropbox/Virginia/GLS_multi")
 
-pacman::p_load("tidyverse", "plyr", "adehabitatHR", "Matching", "sf", "ctmm",
-               "geosphere", "RColorBrewer", "gridExtra", "lubridate", "SiMRiv")
+pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm,
+               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv)
   
 '%!in%' <- function(x,y)!('%in%'(x,y))
 ```
 
 
 First, simulate a correlated RW. We've tried to simulate a Lévy Walk but since ideally we're not using commuting points in our real-data analysis, CRW looks more similar to a real dataset
-```{r randomwalk demo, results = 'hide', message = FALSE, warning = FALSE}
+```{r randomwalk demo, echo = TRUE, message = FALSE, warning = FALSE, results = 'hide'}
 CRW15 <- species(state.CRW(0.25) + 7)
 simCRW <- simulate(CRW15, coords = matrix(rep(0, 2), ncol = 2), time = 10000)
 plot(simCRW[,1:2], type = "l", 
@@ -39,20 +39,20 @@ spSimCRW <- SpatialPoints(coords = simCRW[,1:2])
 ```
 
 Now we generate a convex hull of that correlated RW
-```{r convexhull demo, results = 'hide', message = FALSE, warning = FALSE}
+```{r convexhull demo, results = 'hide', echo = TRUE, message = FALSE, warning = FALSE}
 example_MCP <- mcp(spSimCRW, percent = 100)
 plot(example_MCP, main = "100% Minimum convex polygon of the simulated CRW")
 plot(spSimCRW, add = T, pch = 20, cex = 0.5, col = "gray")
 ```
 
 We convert this convex hull into a resistance surface from SiMRiv to limit distribution of newly simulated tracks
-```{r resistancesurface demo, message = FALSE, warning = FALSE}
+```{r resistancesurface demo, echo = TRUE, message = FALSE, warning = FALSE}
 res_surface <- resistanceFromShape(example_MCP, res = 1, margin = c(500, 500))
 plot(res_surface, main = "Resistance surface generated from the previous MCP")
 ```
 
 We now simulate tracks within the resistance shape
-```{r simulate demo,  message = FALSE, warning = FALSE}
+```{r simulate demo,  echo = TRUE, message = FALSE, warning = FALSE}
 simCRW_res <- simulate(list(CRW15, CRW15, CRW15, CRW15), coords = matrix(rep(0, 8), 
                                                                          ncol = 2), 
                        time = 10000, resist = res_surface)
