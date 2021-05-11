@@ -1,0 +1,1 @@
+This folder contains the functions developed to test the effect of individual site fidelity, temporal variability and spatial variability in the inference of higher-level distributions from individual tracking data
