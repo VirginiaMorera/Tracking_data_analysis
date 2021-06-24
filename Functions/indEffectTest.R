@@ -1,16 +1,17 @@
+## indEfectTest 
+
+#tracks: dataframe containing, at least,  latitude, longitude, trip ID, group ID and Date Time fields
+#      : datetime field must be called Date_Time and be in ymd_HMS format
+#      : latitude field must be called Latitude
+#      : longitude field must be called Longitude
+#      : the names of the trip and group identifier variables are specified in the arguments "tripID" and "groupID"
+
+# plotIT: logical, if TRUE, a density plot of the within- and between-group median overlaps will be produced. 
+# debias: logical, if TRUE debiased estimators of the BA will be produced. 
+
 indEffectTest <- function(
   tracks, tripID, groupVar, plotIT = TRUE, 
   debias = TRUE) {
-  
-  #tracks: dataframe containing, at least,  latitude, longitude, trip ID, group ID and Date Time fields
-  #      : datetime field must be called Date_Time and be in ymd_HMS format
-  #      : latitude field must be called Latitude
-  #      : longitude field must be called Longitude
-  #      : the names of the trip and group identifier variables are specified in the arguments "tripID" and "groupID"
-  
-  # plotIT: logical, if TRUE, a density plot of the within- and between-group median overlaps will be produced. 
-  # debias: logical, if TRUE debiased estimators of the BA will be produced. 
-   
   
   if (!requireNamespace("purrr", quietly = TRUE)) {
     stop("Package \"purrr\" needed for  function to work. Please install.",
@@ -144,18 +145,17 @@ indEffectTest <- function(
   BWint <- data.frame(Low = BWlo,
                       High = BWhi)
   
-  BWint %>% 
+  BWint <- BWint %>% 
     mutate(Contains = "NA") %>% 
-    mutate(Contains = dplyr::if_else((Low > WI_median), "Below", 
-                                     dplyr::if_else(Low < WI_median & High > WI_median, "Within", 
-                                                    dplyr::if_else(High < WI_median, "Above", Contains)))) -> BWint
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
   
   proportions <- as.data.frame(prop.table(table(BWint$Contains)))
   
   names(proportions) <- c("WI_Median_Position", "Percentage")
-  proportions$Percentage <- round(proportions$Percentage*100, 1)
+  proportions$Percentage <- round(proportions$Percentage*100, 2)
   
   (proportions_wide <- spread(proportions, WI_Median_Position, Percentage))
+  
   
   # organise output
   Result <- list()
