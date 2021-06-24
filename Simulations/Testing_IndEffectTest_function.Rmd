@@ -1,25 +1,30 @@
 ---
 title: "ISF test"
 author: "Morera-Pujol, Virginia"
-date: "March 2021"
+date: "May 2021"
 output: html_document
 ---
 
 ## Individual site fidelity test
 
-Testing the IndEffectTest function developed for the *Detecting recurrent sources of variability in animal tracking studies* manuscript by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021 
+Testing the IndEffectTest function developed for the *Detecting recurrent sources of variability in animal tracking studies* manuscript by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021
 
 ### Description
 
-In this document I'll generate, using the package `SIMRiv`, simulated animal movement tracks to test the detection of Individual Site Fidelity by the function developed for the MS "Detecting recurrent sources of variability in animal tracking studies", by Virginia Morera-Pujol et al. (2020). The details of how the tracks with ISF can be simulated can be found [here](https://github.com/VirginiaMorera/Tracking_data_analysis) 
+In this document I'll generate, using the package `SIMRiv`, simulated animal movement tracks to test the detection of Individual Site Fidelity by the function developed for the MS "Detecting recurrent sources of variability in animal tracking studies", by Virginia Morera-Pujol et al. (2020). The details of how the tracks with ISF can be simulated can be found [here](https://github.com/VirginiaMorera/Tracking_data_analysis)
 
-Here, we'll run the function once in a dataset of 10 individuals with 10 trips each, with different origins, and once on a dataset of 10 individuals with 10 trips each with the same origin (central place forager scenario). 
+Here, we'll run the function once in a dataset of 10 individuals with 10 trips each, with different origins, and once on a dataset of 10 individuals with 10 trips each with the same origin (central place forager scenario).
 
 ### For animals with different origins
 
 #### Generating the data
 
+We use a value for resistance = 1, which means we're simulating maximum ISF (simulated tracks are forced within the template area of no resistance because resistance outside the template area is 1).
+
 ```{r sensitivitytest1 prepare,  results = 'hide', echo = TRUE, message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE}
+
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
 set.seed(123)
 # set movement parameters of the "species". 
 # We're going to configure a Correlated Random walker
@@ -94,7 +99,7 @@ for (i in 1:10) {
 
 Now the list `simulated_tracks` has 10 elements, each of them containing the 10 tracks belonging to each "individual". We need to reformat that in a way that we can proceed with the Individual Effect Test
 
-```{r sensitivitytest1 prepare2, results='hide', echo=TRUE, message=FALSE, warning=FALSE, fig.show='hide'}
+```{r sensitivitytest1 prepare2, results='hide', echo = TRUE, message=FALSE, warning=FALSE, fig.show='hide'}
 list.df <- lapply(seq_along(simulated_tracks),
                   function(i){simulated_tracks[i][[1]]})
 
@@ -105,17 +110,17 @@ simulated_dataset <- do.call("rbind",
 simulated_dataset@proj4string <- CRS(as.character(NA))
 ```
 
-Now we visualise the dataset we've created
+#### Visualising the data
 
-```{r, results='hide', echo=TRUE, message=FALSE, warning=FALSE, fig.width=10.5, fig.height=7}
+```{r, results='hide', echo = TRUE, message=FALSE, warning=FALSE, fig.width=10.5, fig.height=7}
 # first create a version of the data without BirdID to calculate trip overlaps 
 sds <- as.data.frame(simulated_dataset)
 
 # convert it in order to be able to plot it 
-sdf <- sds %>% 
-  st_as_sf(coords = c("coords.x1", "coords.x2")) %>%
-  separate(TrackID, into = c("BirdID", "TrackID"), sep = "_") %>%
-  mutate(BirdID = factor(BirdID, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10")))
+sds %>% 
+  st_as_sf(coords = c("coords.x1", "coords.x2")) %>% 
+  tidyr::separate(TrackID, into = c("BirdID", "TrackID"), sep = "_") -> sdf
+
 
 col1 <- ggplot() + 
   geom_sf(data = sdf, aes(col = BirdID), alpha = 0.3, size = 0.7) + 
@@ -132,9 +137,11 @@ print(col1)
 
 #### Testing the function
 
-We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking. 
+We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking.
 
-```{r sensitivitytest1 run, message = FALSE, warning = FALSE, cache = TRUE}
+##### Calculate akde for all tracks and pairwise overlaps
+
+```{r sensitivitytest1 run, message = FALSE, warning = FALSE, cache = TRUE, echo = TRUE}
 # To calculate the overlap we:
 # 1 - Turn simulated tracks into "telemetry" objects"
 # 2 - fit a guesstimate movement model to each track
@@ -161,6 +168,8 @@ sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
 
 FIT.list <- list()
 
+file <- file("FIT.list_nonColonial.txt", open = "wt")
+sink(file, type = "message") # sink text messages to .txt to avoid them appearing on the markdown
 before <- Sys.time()
 for(i in 1:length(sd_tel)){
   print(i)
@@ -173,18 +182,17 @@ for(i in 1:length(sd_tel)){
   FIT.list[[i]] <- FITS[[1]]
 }
 Sys.time() - before
+sink()
 
 # 4
 ov <- ctmm::overlap(FIT.list, level = 0.95)
 ```
 
-Now we'll reproduce what the function does step by step. 
-
-##### Obtain median, lower and upper bounds of CI  of the voerlap and name the matrices with the "BirdID"
+##### Obtain median, lower and upper bounds of CI of the overlap and name the matrices with the "BirdID"
 
 The array `ov` contains three "layers", with the median of the overlap distribution in the middle one, and the upper and lower bounds of the CI selected in de function in the first and last. We extract the three matrices from there
 
-```{r, message = FALSE, warning = FALSE}
+```{r, message = FALSE, warning = FALSE, echo = TRUE}
 # separate the layers of the median and CI
 X05 <- ov[,,2]
 Xlo <- ov[,,1]
@@ -201,14 +209,13 @@ gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), 
 rownames(X05) <- colnames(X05) <- gid
 rownames(Xlo) <- colnames(Xlo) <- gid
 rownames(Xhi) <- colnames(Xhi) <- gid
-```  
+```
 
-##### separate within (WI) and between (BW) group overlaps
+##### Separate within (WI) and between (BW) group overlaps
 
-The function works by testing how many of the Between Individual overlap CIs contain the median of all the within individual overlaps. It provides three values, the proportion of between individual overlap CIs that contain the median of the WI overlaps, the proportion of BW overlap CIs in which the median of the WI overlaps falls outside of the BW and is higher (above) and the proportion in which is lower (below). 
+The function works by testing how many of the Between Individual overlap CIs contain the median of all the within individual overlaps. It provides three values, the proportion of between individual overlap CIs that contain the median of the WI overlaps, the proportion of BW overlap CIs in which the median of the WI overlaps falls outside of the BW and is higher (above) and the proportion in which is lower (below).
 
-
-```{r,  message = FALSE, warning = FALSE} 
+```{r,  message = FALSE, warning = FALSE, echo = TRUE}
 # median
 WI05 <- NULL
 BW05 <- NULL
@@ -252,54 +259,54 @@ Overlaps <- data.frame(
 )
 ```
 
-##### Visualise results
+#### Visualising results
 
 First of all we visualise the different densities of the WI and BW medians (without taking into account CI of individual overlaps)
 
-```{r,  message = FALSE, warning = FALSE} 
+```{r,  message = FALSE, warning = FALSE, echo = TRUE}
 (plot <- ggplot(data = Overlaps) + 
-  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.1) + 
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
   ggtitle("Density of within individual vs. between individual median overlaps") +
   theme_bw())
 ```
 
+#### Calculating the WBR (Within-Between ratio)
 
 Now we calculate the median of the WI overlaps, to use as reference values (see if it is contained, above or below the BW CIs)
 
-```{r,  message = FALSE, warning = FALSE}
+```{r,  message = FALSE, warning = FALSE, echo = TRUE}
 WI_median <- quantile(WI05, 0.5)
 
 BWint <- data.frame(Low = BWlo,
                     High = BWhi)
 ```
 
-Finally we produce a one row dataset containing the proportion of Between individual overlaps in which the Within Individual median is below, inside or above the CI. 
+Finally we produce a one row dataset containing the proportion of Between individual overlaps in which the Within Individual median is below, inside or above the CI.
 
-```{r,  message = FALSE, warning = FALSE}
-BWint %>% 
-  mutate(Contains = "NA") %>% 
-  mutate(Contains = if_else(Low > WI_median, "Below", 
-                              if_else(Low < WI_median & High > WI_median, "Within", 
-                                      if_else(High < WI_median, "Above", Contains)))) -> BWint
+```{r,  message = FALSE, warning = FALSE, echo = TRUE}
+BWint <- BWint %>% 
+    mutate(Contains = "NA") %>% 
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
   
-  proportions <- as.data.frame(prop.table(table(BWint$Contains)))
-  
-  names(proportions) <- c("WI_Median_Position", "Percentage")
-  proportions$Percentage <- round(proportions$Percentage*100, 1)
-  
-  (proportions_wide <- spread(proportions, WI_Median_Position, Percentage))
-```  
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
 
-In 76.8% of the cases, the median of the Within Individual overlaps falls above the 95% CI of the between individual overlap distribution. This would indicate that, when run on an artificial dataset, purposely simulating a high degree of individual site fidelity, our function is able to detect individual site fidelity in the simulated dataset. 
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
 
+(proportions_wide <- spread(proportions, WI_Median_Position, Percentage))
+```
+
+The Within-Between ratio is 76.8% (i.e., in 76.8% of the cases, the median of the Within Individual overlaps falls above the 95% CI of the between individual overlap distribution). This would indicate that, when run on an artificial dataset, purposely simulating a high degree of individual site fidelity, our function is able to detect individual site fidelity in the simulated dataset.
 
 ### For animals with the same origin but different outward angles
 
 #### Generating the data
 
-In case of foraging trips of central place foragers, all trips will have the same origin. We create a dataset that simulates those conditions too, to see if the indEffectTest function is still able to detect individual site fidelity. 
+In case of foraging trips of central place foragers, all trips will have the same origin. We create a dataset that simulates those conditions too, to see if the indEffectTest function is still able to detect individual site fidelity.
 
-```{r, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE}
+Again, we simulate the dataset with resistance = 1, which will simulate high ISF conditions
+
+```{r, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE, echo = TRUE}
 set.seed(2106)
 CRW <- species(state.CRW(0.2))
 test <- simulate(CRW, coords = c(0, 0), time = 100)
@@ -309,7 +316,7 @@ baseRaster <- raster(xmn = -50, xmx = 50, ymn = -50, ymx = 50, res = 0.1)
 values(baseRaster) <- 1
 baseGrid <- as(baseRaster, "SpatialPixels")
 
-# create an vector of random angles
+# create a vector of random angles
 angles <- runif(10, 0, 360)
 # simulate 10 trips for each origin (i.e. 10 trips per individual)
 template_tracks <- list()
@@ -367,7 +374,7 @@ for (i in 1:10) {
 
 We adapt data to indEffectTest same as before
 
-```{r,  results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide'}
+```{r,  results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', echo = TRUE}
 list.df <- lapply(seq_along(simulated_tracks),
                   function(i){simulated_tracks[i][[1]]})
 
@@ -379,16 +386,16 @@ simulated_dataset <- do.call("rbind",
 simulated_dataset@proj4string <- CRS(as.character(NA))
 ```
 
-Now we visualise the dataset we've created
+#### Visualising the data
 
-```{r}
+```{r, results = 'hide', message = FALSE, warning = FALSE, echo = TRUE}
 # first create a version of the data without BirdID to calculate trip overlaps 
 sds <- as.data.frame(simulated_dataset)
 
 # convert it in order to be able to plot it 
 sds %>% 
   st_as_sf(coords = c("coords.x1", "coords.x2")) %>% 
-  separate(TrackID, into = c("BirdID", "TrackID"), sep = "_") -> sdf
+  tidyr::separate(TrackID, into = c("BirdID", "TrackID"), sep = "_") -> sdf
 
 
 col2 <- ggplot() + 
@@ -401,15 +408,15 @@ col2 <- ggplot() +
   NULL
 print(col2)
 
-ggsave(filename = "HighISF_colonial.png", width = 12*1.5, height = 10*1.5, dpi = 800, units = "cm")
+#ggsave(filename = "HighISF_colonial.png", width = 12*1.5, height = 10*1.5, dpi = 800, units = "cm")
 
 ```
 
 #### Testing the function
 
-We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking. 
+##### Calculate akde for all tracks and pairwise overlaps
 
-```{r, message = FALSE, warning = FALSE, cache = TRUE}
+```{r, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', echo = TRUE}
 # To calculate the overlap we:
 # 1 - Turn simulated tracks into "telemetry" objects"
 # 2 - fit a guesstimate movement model to each track
@@ -428,6 +435,12 @@ sds %>%
                 datetime = Date_Time) %>% 
   ungroup() -> sds
 sds <- as.data.frame(sds)
+
+message_filename = 'script_messages.txt'
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+
 sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
 
 
@@ -445,17 +458,17 @@ for(i in 1:length(sd_tel)){
   FIT.list[[i]] <- FITS[[1]]
 }
 Sys.time() - before
+sink()
 
 # 4
 ov <- ctmm::overlap(FIT.list, level = 0.95)
 ```
 
-Now we'll reproduce what the function does step by step. 
+##### Obtain median, lower and upper bounds of CI of the overlap and name the matrices with the "BirdID"
 
-##### Obtain median, lower and upper bounds of CI  of the voerlap and name the matrices with the "BirdID"
 The array `ov` contains three "layers", with the median of the overlap distribution in the middle one, and the upper and lower bounds of the CI selected in de function in the first and last. We extract the three matrices from there
 
-```{r}
+```{r, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', echo = TRUE}
 # separate the layers of the median and CI
 X05 <- ov[,,2]
 Xlo <- ov[,,1]
@@ -472,12 +485,13 @@ gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), 
 rownames(X05) <- colnames(X05) <- gid
 rownames(Xlo) <- colnames(Xlo) <- gid
 rownames(Xhi) <- colnames(Xhi) <- gid
-```  
+```
 
-##### separate within (WI) and between (BW) group overlaps
-The function works by testing how many of the Between Individual overlap CIs contain the median of all the within individual overlaps. It provides three values, the proportion of between individual overlap CIs that contain the median of the WI overlaps, the proportion of BW overlap CIs in which the median of the WI overlaps falls outside of the BW and is higher (above) and the proportion in which is lower (below). 
+##### Separate within (WI) and between (BW) group overlaps
 
-```{r} 
+The function works by testing how many of the Between Individual overlap CIs contain the median of all the within individual overlaps. It provides three values, the proportion of between individual overlap CIs that contain the median of the WI overlaps, the proportion of BW overlap CIs in which the median of the WI overlaps falls outside of the BW and is higher (above) and the proportion in which is lower (below).
+
+```{r, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', echo = TRUE}
 # mediana
 WI05 <- NULL
 BW05 <- NULL
@@ -521,41 +535,41 @@ Overlaps <- data.frame(
 )
 ```
 
-##### Visualise results
+#### Visualising results
 
 First of all we visualise the different densities of the WI and BW medians (without taking into account CI of individual overlaps)
 
-```{r} 
+```{r,  message = FALSE, warning = FALSE, echo = TRUE}
 (plot <- ggplot(data = Overlaps) + 
   geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
   ggtitle("Density of within individual vs. between individual median overlaps") +
   theme_bw())
 ```
 
+#### Calculating the WBR (Within-Between ratio)
+
 Now we calculate the median of the WI overlaps, to use as reference values (see if it is contained, above or below the BW CIs)
 
-```{r}
+```{r,  message = FALSE, warning = FALSE, echo = TRUE}
 WI_median <- quantile(WI05, 0.5)
 
 BWint <- data.frame(Low = BWlo,
                     High = BWhi)
 ```
 
-Finally we produce a one row dataset containing the proportion of Between individual overlaps in which the Within Individual median is below, inside or above the CI. 
+Finally we produce a one row dataset containing the proportion of Between individual overlaps in which the Within Individual median is below, inside or above the CI.
 
-```{r}
-BWint %>% 
-  mutate(Contains = "NA") %>% 
-  mutate(Contains = dplyr::if_else((Low > WI_median), "Below", 
-                                   dplyr::if_else(Low < WI_median & High > WI_median, "Within", 
-                                                  dplyr::if_else(High < WI_median, "Above", Contains)))) -> BWint
+```{r,  message = FALSE, warning = FALSE, echo = TRUE}
+BWint <- BWint %>% 
+    mutate(Contains = "NA") %>% 
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
   
-  proportions <- as.data.frame(prop.table(table(BWint$Contains)))
-  
-  names(proportions) <- c("WI_Median_Position", "Percentage")
-  proportions$Percentage <- round(proportions$Percentage*100, 1)
-  
-  (proportions_wide <- spread(proportions, WI_Median_Position, Percentage))
-```  
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
 
-In 62% of the cases, the median of the Within Individual overlaps falls above the 95% CI of the between individual overlap distribution. This would indicate that, even when all trips start in the same origin (central place foragers scenario), our function is able to detect individual site fidelity in the simulated dataset. 
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+(proportions_wide <- spread(proportions, WI_Median_Position, Percentage))
+```
+
+The Within-Between ratio is 62% (i.e., in 62% of the cases, the median of the Within Individual overlaps falls above the 95% CI of the between individual overlap distribution). This would indicate that, even when all trips start in the same origin (central place foragers scenario), our function is able to detect individual site fidelity in the simulated dataset.
