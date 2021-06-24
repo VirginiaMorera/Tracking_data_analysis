@@ -1,0 +1,446 @@
+---
+title: "Effect of sampling frequency on ISF test"
+author: "Virginia Morera-Pujol"
+date: "May 2021"
+output: html_document
+---
+
+## Sampling frequency test
+
+Testing the ability of the IndEffectTest function to detect ISF at different sampling frequencies. The test was developed for the *Detecting recurrent sources of variability in animal tracking studies* manuscript by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021
+
+### Description
+
+Here, we use the dataset of the non-colonial simulated species with a 1 resistance surface (high ISF). From it, we will subset every fifth position, and then every tenth, and compare the results of the individual site fidelity test. 
+
+```{r setup, include = F}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
+                      fig.width = 12, fig.height = 8)
+knitr::opts_knit$set(root.dir = "C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
+
+# setwd("C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
+
+pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm,
+               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv)
+  
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+load("C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest/simulated_dataset_noncolonial_res1.RDS")
+```
+
+#### First test ISF with the full simulated dataset of high ISF
+
+```{r, cache = TRUE, message = FALSE, warning = FALSE, collapse = TRUE}
+sds <- as.data.frame(simulated_dataset)
+
+sds %>% 
+  dplyr::group_by(TrackID) %>%
+  dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'), 
+                                length.out = 100)) %>% 
+  mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+  dplyr::select(individual.local.identifier = TrackID, 
+                Longitude = coords.x1, Latitude = coords.x2, 
+                datetime = Date_Time) %>% 
+  ungroup() -> sds
+sds <- as.data.frame(sds)
+
+message_filename = "output_fullds.txt"
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+
+
+FIT.list <- list()
+
+before <- Sys.time()
+for(i in 1:length(sd_tel)){
+  # print(i)
+  one <- sd_tel[[i]]
+  # 2
+  GUESS <- ctmm.guess(one, interactive=F)
+  # 3
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+  # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+  FIT.list[[i]] <- FITS[[1]]
+}
+sink(file = NULL, type="message")
+sink(file = NULL, type="output")
+# closeAllConnections() 
+Sys.time() - before
+
+# 4
+ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+# separate the layers of the median and CI
+X05 <- ov[,,2]
+Xlo <- ov[,,1]
+Xhi <- ov[,,3]
+
+# remove lower triangle of each (repeated values since it's a symetric matrix)
+X05[lower.tri(X05, diag = T)] <- NA
+Xlo[lower.tri(Xlo, diag = T)] <- NA
+Xhi[lower.tri(Xhi, diag = T)] <- NA
+
+
+# assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+rownames(X05) <- colnames(X05) <- gid
+rownames(Xlo) <- colnames(Xlo) <- gid
+rownames(Xhi) <- colnames(Xhi) <- gid
+
+# median
+WI05 <- NULL
+BW05 <- NULL
+
+# BW lower and higher CI bounds
+BWlo <- NULL
+BWhi <- NULL
+
+for (i in seq_along(rownames(X05))) {
+  # i = 2
+  
+  # medians
+  x1 <- X05[i,] 
+  x2 <- x1[which(names(x1) == rownames(X05)[i])]
+  x3 <- x1[which(names(x1) != rownames(X05)[i])]
+  
+  WI05 <- c(WI05, x2)
+  BW05 <- c(BW05, x3)
+  
+  # BW intervals
+  y1 <- Xlo[i,] 
+  y2 <- y1[which(names(y1) != rownames(Xlo)[i])]
+  BWlo <- c(BWlo, y2)
+  
+  z1 <- Xhi[i,] 
+  z2 <- z1[which(names(z1) != rownames(Xhi)[i])]
+  BWhi <- c(BWhi, z2)
+  
+}
+
+# remove NAs
+WI05 <- WI05[!is.na(WI05)]
+BW05 <- BW05[!is.na(BW05)]
+BWlo <- BWlo[!is.na(BWlo)]
+BWhi <- BWhi[!is.na(BWhi)]
+
+# organize values in a dataframe for plotting
+Overlaps <- data.frame(
+  Overlap = c(WI05, BW05),
+  Type = c(rep("Within", length(WI05)), rep("Between", length(BW05)))
+)
+
+plotFull <- ggplot(data = Overlaps) + 
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
+  ggtitle("Full dataset") +
+  theme_bw()
+
+WI_median <- quantile(WI05, 0.5)
+
+BWint <- data.frame(Low = BWlo,
+                    High = BWhi)
+
+BWint <- BWint %>% 
+  mutate(Contains = "NA") %>% 
+  mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+proportions_wide1 <- spread(proportions, WI_Median_Position, Percentage)
+
+```
+
+
+#### With the same dataset but subset just one every 5 positions
+
+```{r, cache = TRUE, message = FALSE, warning = FALSE}
+
+# turn to sf for easy subsetting and subset
+
+sim_5th <- st_as_sf(simulated_dataset) %>%
+  slice(which(row_number() %% 5 == 1))
+
+sim_5th <- as_Spatial(sim_5th)
+
+sds <- as.data.frame(sim_5th)
+
+sds %>%
+  dplyr::group_by(TrackID) %>%
+  dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'),
+                                length.out = 20)) %>%
+  mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>%
+  dplyr::select(individual.local.identifier = TrackID,
+                Longitude = coords.x1, Latitude = coords.x2,
+                datetime = Date_Time) %>%
+  ungroup() -> sds
+
+sds <- as.data.frame(sds)
+
+message_filename = "output_5thds.txt"
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+
+# 1
+sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+
+FIT.list <- list()
+
+before <- Sys.time()
+for(i in 1:length(sd_tel)){
+  # print(i)
+  one <- sd_tel[[i]]
+  # 2
+  GUESS <- ctmm.guess(one, interactive=F)
+  # 3
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+  # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+  FIT.list[[i]] <- FITS[[1]]
+}
+sink(file = NULL, type="message")
+sink(file = NULL, type="output")
+# closeAllConnections()
+Sys.time() - before
+
+# 4
+ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+# separate the layers of the median and CI
+X05 <- ov[,,2]
+Xlo <- ov[,,1]
+Xhi <- ov[,,3]
+
+# remove lower triangle of each (repeated values since it's a symetric matrix)
+X05[lower.tri(X05, diag = T)] <- NA
+Xlo[lower.tri(Xlo, diag = T)] <- NA
+Xhi[lower.tri(Xhi, diag = T)] <- NA
+
+
+# assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+rownames(X05) <- colnames(X05) <- gid
+rownames(Xlo) <- colnames(Xlo) <- gid
+rownames(Xhi) <- colnames(Xhi) <- gid
+
+# median
+WI05 <- NULL
+BW05 <- NULL
+
+# BW lower and higher CI bounds
+BWlo <- NULL
+BWhi <- NULL
+
+for (i in seq_along(rownames(X05))) {
+  # i = 2
+
+  # medians
+  x1 <- X05[i,]
+  x2 <- x1[which(names(x1) == rownames(X05)[i])]
+  x3 <- x1[which(names(x1) != rownames(X05)[i])]
+
+  WI05 <- c(WI05, x2)
+  BW05 <- c(BW05, x3)
+
+  # BW intervals
+  y1 <- Xlo[i,]
+  y2 <- y1[which(names(y1) != rownames(Xlo)[i])]
+  BWlo <- c(BWlo, y2)
+
+  z1 <- Xhi[i,]
+  z2 <- z1[which(names(z1) != rownames(Xhi)[i])]
+  BWhi <- c(BWhi, z2)
+
+}
+
+# remove NAs
+WI05 <- WI05[!is.na(WI05)]
+BW05 <- BW05[!is.na(BW05)]
+BWlo <- BWlo[!is.na(BWlo)]
+BWhi <- BWhi[!is.na(BWhi)]
+
+# organize values in a dataframe for plotting
+Overlaps <- data.frame(
+  Overlap = c(WI05, BW05),
+  Type = c(rep("Within", length(WI05)), rep("Between", length(BW05)))
+)
+
+plot1 <- ggplot(data = Overlaps) +
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) +
+  ggtitle("Every 5th position") +
+  theme_bw()
+
+WI_median <- quantile(WI05, 0.5)
+
+BWint <- data.frame(Low = BWlo,
+                    High = BWhi)
+
+BWint <- BWint %>%
+    mutate(Contains = "NA") %>%
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+proportions_wide2 <- spread(proportions, WI_Median_Position, Percentage)
+```
+
+#### With the same dataset but subset just one every 10 positions
+
+```{r, cache = TRUE, message = FALSE, warning = FALSE}
+
+# turn to sf for easy subsetting and subset
+
+sim_10th <- st_as_sf(simulated_dataset) %>%
+  slice(which(row_number() %% 10 == 1))
+
+sim_10th <- as_Spatial(sim_10th)
+
+sds <- as.data.frame(sim_10th)
+
+sds %>%
+  dplyr::group_by(TrackID) %>%
+  dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'),
+                                length.out = 10)) %>%
+  mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>%
+  dplyr::select(individual.local.identifier = TrackID,
+                Longitude = coords.x1, Latitude = coords.x2,
+                datetime = Date_Time) %>%
+  ungroup() -> sds
+
+sds <- as.data.frame(sds)
+
+message_filename = "output_10thds.txt"
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+
+FIT.list <- list()
+
+before <- Sys.time()
+for(i in 1:length(sd_tel)){
+  # print(i)
+  one <- sd_tel[[i]]
+  # 2
+  GUESS <- ctmm.guess(one, interactive=F)
+  # 3
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+  # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+  FIT.list[[i]] <- FITS[[1]]
+}
+sink(file = NULL, type="message")
+sink(file = NULL, type="output")
+# closeAllConnections()
+Sys.time() - before
+
+# 4
+ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+# separate the layers of the median and CI
+X05 <- ov[,,2]
+Xlo <- ov[,,1]
+Xhi <- ov[,,3]
+
+# remove lower triangle of each (repeated values since it's a symetric matrix)
+X05[lower.tri(X05, diag = T)] <- NA
+Xlo[lower.tri(Xlo, diag = T)] <- NA
+Xhi[lower.tri(Xhi, diag = T)] <- NA
+
+
+# assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+rownames(X05) <- colnames(X05) <- gid
+rownames(Xlo) <- colnames(Xlo) <- gid
+rownames(Xhi) <- colnames(Xhi) <- gid
+
+# median
+WI05 <- NULL
+BW05 <- NULL
+
+# BW lower and higher CI bounds
+BWlo <- NULL
+BWhi <- NULL
+
+for (i in seq_along(rownames(X05))) {
+  # i = 2
+
+  # medians
+  x1 <- X05[i,]
+  x2 <- x1[which(names(x1) == rownames(X05)[i])]
+  x3 <- x1[which(names(x1) != rownames(X05)[i])]
+
+  WI05 <- c(WI05, x2)
+  BW05 <- c(BW05, x3)
+
+  # BW intervals
+  y1 <- Xlo[i,]
+  y2 <- y1[which(names(y1) != rownames(Xlo)[i])]
+  BWlo <- c(BWlo, y2)
+
+  z1 <- Xhi[i,]
+  z2 <- z1[which(names(z1) != rownames(Xhi)[i])]
+  BWhi <- c(BWhi, z2)
+
+}
+
+# remove NAs
+WI05 <- WI05[!is.na(WI05)]
+BW05 <- BW05[!is.na(BW05)]
+BWlo <- BWlo[!is.na(BWlo)]
+BWhi <- BWhi[!is.na(BWhi)]
+
+# organize values in a dataframe for plotting
+Overlaps <- data.frame(
+  Overlap = c(WI05, BW05),
+  Type = c(rep("Within", length(WI05)), rep("Between", length(BW05)))
+)
+
+plot2 <- ggplot(data = Overlaps) +
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) +
+  ggtitle("Every 10th position") +
+  theme_bw()
+
+WI_median <- quantile(WI05, 0.5)
+
+BWint <- data.frame(Low = BWlo,
+                    High = BWhi)
+
+BWint <- BWint %>%
+    mutate(Contains = "NA") %>%
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+proportions_wide3 <- spread(proportions, WI_Median_Position, Percentage)
+```
+
+#### Compare the results
+
+```{r, message = FALSE, warning = FALSE, fig.width = 12, fig.height = 12}
+final_df <- bind_rows(
+  proportions_wide1, proportions_wide2, proportions_wide3
+)
+
+final_df$test <- c("original", "every_5th", "every_10th")
+
+final_df %>%
+  kable(digits = 2, align = "rrrr", caption = "Test sampling frequency") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+# write.csv(final_df, file = "compare_frequencies.csv", row.names = F)
+
+# png(filename = "compare_frequencies.png", width = 15, height = 15*1.2, units = "cm", res = 900)
+cowplot::plot_grid(plotFull, plot1, plot2, ncol = 2)
+# dev.off()
+```
+
+
+Either with one 5th or with one 10th of the locations, the function is still able to detect individual site fidelity as well as the full dataset. This demonstrates the function is robust to different sampling frequencies as well.

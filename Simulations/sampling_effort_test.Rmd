@@ -1,0 +1,358 @@
+---
+title: "Untitled"
+author: "Virginia Morera-Pujol"
+date: "May 2021"
+output: html_document
+---
+
+## Different sampling effort test
+
+Testing the ability of the IndEffectTest function to detect ISF when different individuals have different ammounts of data. The test was developed for the *Detecting recurrent sources of variability in animal tracking studies* manuscript by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021
+
+### Description
+
+Here, we generate 9 different datasets of a hundred tracks of a hundred positions each (10000 rows in total) with different individual sampling imbalances:
+
+-   91:1:1:1:1:1:1:1:1:1
+
+-   46:46:1:1:1:1:1:1:1:1
+
+-   31:31:31:1:1:1:1:1:1:1
+
+-   23:23:23:23:1:1:1:1:1:1
+
+-   19:19:19:19:19:1:1:1:1:1
+
+-   16:16:16:16:16:16:1:1:1:1
+
+-   13:13:13:13:13:13:13:1:1:1
+
+-   12:12:12:12:12:12:12:12:1:1
+
+-   11:11:11:11:11:11:11:11:11:1
+
+-   10:10:10:10:10:10:10:10:10:10
+
+```{r setup, include = F}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
+                      fig.width = 12, fig.height = 8)
+knitr::opts_knit$set(root.dir = "C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
+
+# setwd("C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
+
+pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm,
+               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv)
+  
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+```
+
+We will generate the different simulated datasets following the instructions specified in the [Demo vignette](https://rpubs.com/V_Morera-Pujol/Demo_simulating_tracks), so the different steps are not explained here again, just shown.
+
+#### In a first step we generate the templates
+
+```{r, message = FALSE, warning = FALSE}
+CRW <- species(state.CRW(0.4))
+set.seed(1234)
+test <- simulate(CRW, coords = c(0, 0), time = 100)
+
+# create empty base raster for resistance surfaces
+baseRaster <- raster(xmn = -50, xmx = 50, ymn = -50, ymx = 50, res = 0.1)
+values(baseRaster) <- 1
+baseGrid <- as(baseRaster, "SpatialPixels")
+
+# create an vector of random angles
+origin_points <- data.frame(x = runif(10, -25, 25), 
+                            y = runif(10, -25, 25))
+
+# simulate 10 trips for each origin (i.e. 10 trips per individual)
+template_tracks <- list()
+template_UDs <- list()
+
+
+for (i in 1:10) {
+  # i = 1
+  
+  # First we need to create a template trip to get the UD for the resistance surface
+  set.seed(12)
+  template <- simulate(CRW, 
+                       coords = c(origin_points[i,1], origin_points[i, 2]), 
+                       time = 100)
+  template_tracks[i] <- list(template)
+  # lines(template, col = brewer.pal(10,"Set3")[i])
+  # points(template, col = brewer.pal(10,"Set3")[i], pch = 16)
+  spTemplate <- SpatialPoints(coords = template[,1:2], proj4string = baseGrid@proj4string)
+  KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid) 
+  UD50 <- getverticeshr(KDE, percent = 50)
+  template_UDs[i] <- list(UD50) 
+}
+```
+
+### Generating data and running the function
+
+We generate the simulated datasets and run the IndEffectTest functin steps inside a loop for all the specified unbalanced datasets. We will simulate a high ISF, with a resistance value of 1 outside the "allowed" area.
+
+```{r, cache = TRUE, message = FALSE, warning = FALSE}
+repeated_birds <- c(1:9) 
+
+list_of_results <- list()
+plotlist <- list()
+for(j in repeated_birds) {
+  # j = 1
+  cat(j, "repeated bird(s) \n")
+  set.seed(j)
+  x <- sample(1:10, j, replace = FALSE)
+  
+  xlist <- list(CRW)
+  splist <- rep(xlist, floor((100-(10-j))/j))
+  
+  simulated_tracks <- list()
+  
+  # simulate tracks for each individual 
+  for (i in x) {
+    # i = 3
+    res_surface <- resistanceFromShape(template_UDs[[i]], baseRaster = baseRaster, 
+                                       field = 0, background = 1)
+    # plot(res_surface)
+    sim_tracks <- simulate(splist, 
+                           start.resistance	= 0,
+                           time = 100, resist = res_surface)
+    
+    colnames(sim_tracks) <- paste(rep(c("x", "y", "z"), floor((100-(10-j))/j)),
+                                  rep(1:floor((100-(10-j))/j), each = 3), 
+                                  sep = "_")
+    
+    sim_tracks <- sim_tracks %>% 
+      as.data.frame() 
+    
+    
+    x_vector <- sim_tracks %>% 
+      dplyr::select(contains('x')) %>% 
+      mutate(posID = seq(1:100)) %>% 
+      pivot_longer(!posID, names_to = "track_coord", values_to = "degrees")  %>% 
+      separate(track_coord, into = c("coord", "trackID")) %>% 
+      as.data.frame() %>% 
+      dplyr::select(trackID, posID, x = degrees)
+    
+    y_vector <- sim_tracks %>% 
+      dplyr::select(contains('y')) %>% 
+      mutate(posID = seq(1:100)) %>% 
+      pivot_longer(!posID, names_to = "track_coord", values_to = "degrees")  %>% 
+      separate(track_coord, into = c("coord", "trackID")) %>% 
+      as.data.frame() %>% 
+      dplyr::select(trackID, posID, y = degrees)
+    
+    sim_tracks2 <- x_vector %>% 
+      left_join(y_vector) %>% 
+      arrange(trackID, posID)
+    
+    spSim <- SpatialPointsDataFrame(coords = sim_tracks2[,3:4], 
+                                    data = data.frame(TrackID = paste(rep(i, nrow(sim_tracks2)), 
+                                                                      sim_tracks2$trackID, sep = "_"),
+                                                      BirdID = rep(i, nrow(sim_tracks2))))
+    spSim@proj4string <- baseGrid@proj4string
+    simulated_tracks[i] <- list(spSim)
+    spSim$BirdID <- NULL
+    # KUD_sim <- kernelUD(spSim, grid = baseGrid)
+    # print(mean(kerneloverlap(spSim, method = "BA", percent = 50, conditional = T)))
+    # sp::plot(spSim, col = factor(spSim$TrackID), pch = 20, cex = 0.5)
+  }  
+  
+  y <- 1:10
+  
+  
+  
+  for (i in y[-x]) {
+    res_surface <- resistanceFromShape(template_UDs[[i]], baseRaster = baseRaster, 
+                                       field = 0, background = 0.5)
+    # plot(res_surface)
+    sim_tracks <- simulate(xlist, 
+                           
+                           start.resistance	= 0,
+                           time = 100, resist = res_surface)
+    xcoords <- as.vector(sim_tracks[,1])
+    ycoords <- as.vector(sim_tracks[,2])
+    spSim <- SpatialPointsDataFrame(coords = cbind(xcoords, ycoords), 
+                                    data = data.frame(TrackID = paste(i, 
+                                                                      rep(1, each = 100),
+                                                                      sep = "_"), 
+                                                      BirdID = rep(i, 100)))
+    spSim@proj4string <- baseGrid@proj4string
+    simulated_tracks[i] <- list(spSim)
+    spSim$BirdID <- NULL
+    # KUD_sim <- kernelUD(spSim, grid = baseGrid)
+  }
+  
+  list.df <- lapply(seq_along(simulated_tracks),
+                    function(i){simulated_tracks[i][[1]]})
+  
+  # apply rbind to the list
+  simulated_dataset <- do.call("rbind",
+                               list.df)
+  
+  simulated_dataset@proj4string <- baseGrid@proj4string
+  
+  
+  sds <- data.frame(TrackID = simulated_dataset$TrackID, 
+                    BirdID = simulated_dataset$BirdID, 
+                    xcoords = simulated_dataset@coords[,1],
+                    ycoords = simulated_dataset@coords[,2])
+  
+  sds$BirdID <- NULL
+  
+  sds <- sds %>% 
+    dplyr::group_by(TrackID) %>%
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'), 
+                                  length.out = n())) %>% 
+    mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+    dplyr::select(TrackID, 
+                  Longitude = xcoords, Latitude = ycoords, 
+                  datetime = Date_Time) %>% 
+    ungroup() %>% 
+    as.data.frame()
+  
+  message_filename = paste("j", j, 'script_messages.txt', sep = "_")
+  try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+  sink(message_file, type="message")
+  sink(message_file, type="output")
+  
+  sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+  
+  
+  FIT.list <- list()
+  
+  before <- Sys.time()
+  
+  for(i in 1:length(sd_tel)){
+    print(i)
+    one <- sd_tel[[i]]
+    # 2
+    GUESS <- ctmm.guess(one, interactive=F)
+    # 3
+    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+    print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+    FIT.list[[i]] <- FITS[[1]]
+  }
+  
+  sink(file = NULL, type="message")
+  sink(file = NULL, type="output")
+  # closeAllConnections() 
+  Sys.time() - before
+  
+  # 4
+  ov <- ctmm::overlap(FIT.list, level = 0.95)
+  # save(FIT.list, ov, file = paste("powerTest". j, ".RDS"))
+  
+  # we select the "middle layer" of the array which contains the point estimate (for now ignoring the CI)
+  X05 <- ov[,,2]
+  Xlo <- ov[,,1]
+  Xhi <- ov[,,3]
+  
+  X05[lower.tri(X05, diag = T)] <- NA
+  Xlo[lower.tri(Xlo, diag = T)] <- NA
+  Xhi[lower.tri(Xhi, diag = T)] <- NA
+  
+  Result1 <- list()
+  Result1[1] <- list(list(X05, Xlo, Xhi))
+  # assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+  gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+  rownames(X05) <- colnames(X05) <- gid
+  rownames(Xlo) <- colnames(Xlo) <- gid
+  rownames(Xhi) <- colnames(Xhi) <- gid
+  
+  # separate within (WI) and between (BW) group overlaps
+  
+  # median
+  WI05 <- NULL
+  BW05 <- NULL
+  
+  # lower
+  WIlo <- NULL
+  BWlo <- NULL
+  
+  # higher
+  WIhi <- NULL
+  BWhi <- NULL
+  
+  for (i in seq_along(rownames(X05))) {
+    # i = 1
+    
+    # medians
+    x1 <- X05[i,] 
+    x2 <- x1[which(names(x1) == rownames(X05)[i])]
+    x3 <- x1[which(names(x1) != rownames(X05)[i])]
+    WI05 <- c(WI05, x2)
+    BW05 <- c(BW05, x3)
+    
+    # BW intervals
+    x1 <- Xlo[i,] 
+    x3 <- x1[which(names(x1) != rownames(Xlo)[i])]
+    BWlo <- c(BWlo, x3)
+    
+    x1 <- Xhi[i,] 
+    x3 <- x1[which(names(x1) != rownames(Xhi)[i])]
+    BWhi <- c(BWhi, x3)
+    
+  }
+  
+  # medians
+  BW05 <- BW05[!is.na(BW05)]
+  WI05 <- WI05[!is.na(WI05)]
+  
+  # BW intervals
+  BWlo <- BWlo[!is.na(BWlo)]
+  BWhi <- BWhi[!is.na(BWhi)]
+  
+  # organize values in a dataframe for plotting
+  Overlaps <- data.frame(
+    Overlap = c(WI05, BW05),
+    Type = c(rep("Within", length(WI05)), rep("Between", length(BW05))),
+    Test = "ind_1"
+  )
+  Result1[2] <- list(Overlaps)
+  # plot boxplot
+  
+  plot1 <- ggplot(data = Overlaps) + 
+    geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
+    ggtitle("Density of within individual vs. between individual median overlaps") +
+    theme_bw()
+  
+  Result1[3] <- list(plot1)
+  
+  
+  WI_median <- quantile(WI05, 0.5)
+  
+  BWint <- data.frame(Low = BWlo,
+                      High = BWhi)
+  
+  BWint <- BWint %>% 
+    mutate(Contains = "NA") %>% 
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+  
+  proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+  
+  names(proportions) <- c("WI_Median_Position", "Percentage")
+  proportions$Percentage <- round(proportions$Percentage*100, 2)
+  
+  (proportions_wide <- spread(proportions, WI_Median_Position, Percentage))
+  
+  Result1[4] <- list(proportions_wide)
+  
+  list_of_results[j] <- list(Result1)
+  plotlist[j] <- list(plot1)
+}
+```
+
+### Compare results
+
+```{r, cache = TRUE, message = FALSE, warning = FALSE, fig.height = 12, fig.width = 12}
+grid.arrange(
+  grobs = plotlist,
+  layout_matrix = rbind(c(1, 2, 3),
+                        c(4, 5, 6),
+                        c(7, 8, 9))
+)
+
+```
+
+Whether there's a strong unbalance (1 individual repeatedly sampled and the rest only sampled once) or data are more even (9 individuals repeatedly sampled, only one sampled only once), the function is able to detect individual site fidelity
