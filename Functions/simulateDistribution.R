@@ -1,8 +1,6 @@
 #### simulate distribution ####
-## Written by Virginia Morera-Pujol (2019)
 
-
-# must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
+# Tracks must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
 # populationInfo must be a data frame with at least Colony, Sp and Pairs
 # scale is the smoothing factor to be used in the Kernel Density Estimation (in Km)
 # grid is a number giving the size of the grid on which the UD should be estimated. 
@@ -11,7 +9,7 @@
 
 simulateDistribution <- function(tracks, populationInfo, scale, grid = 500, multiFactor = 5){
   
-  # Tracks <- colony_boot_list[[2]] #this can be used for testing if something goes wrong
+  # tracks <- colony_boot_list[[2]] #this can be used for testing if something goes wrong
   require(adehabitatHR)
   require(sp)
   require(spatstat, quietly = T)
@@ -22,7 +20,7 @@ simulateDistribution <- function(tracks, populationInfo, scale, grid = 500, mult
   if (!"Species" %in% names(tracks)) stop("Species field does not exist")
   if (!"Population" %in% names(tracks)) stop("Population field does not exist")
   
-  # Convert Tracks to spatial dataframe and project them, or check projection if already SPDF (and if already is SPDF it accepts this)
+  # Convert tracks to spatial dataframe and project them, or check projection if already SPDF (and if already is SPDF it accepts this)
   if (class(tracks) != "SpatialPointsDataFrame")     ## convert to SpatialPointsDataFrame and project
   {
     ## filter DF to the minimum fields that are needed
@@ -62,7 +60,7 @@ simulateDistribution <- function(tracks, populationInfo, scale, grid = 500, mult
       TracksSpatial@data <- TracksSpatial@data %>% dplyr::select(GroupVar, tripID, Latitude, Longitude)
     }
   }
-
+  
   map <- rworldmap::getMap(resolution = "coarse")
   map <- spTransform(map, TracksSpatial@proj4string)
   # generate kernel
@@ -71,24 +69,14 @@ simulateDistribution <- function(tracks, populationInfo, scale, grid = 500, mult
   # convert to pixel image
   r <- raster(as(Kernel.est, "SpatialPixelsDataFrame"))
   # raster.as.im function from Jeffrey Evans answer here: https://bit.ly/2TI0FXB
-  raster.as.im <- function(im) {
-    r <- raster::res(im)
-    orig <- sp::bbox(im)[, 1] + 0.5 * r
-    dm <- dim(im)[2:1]
-    xx <- unname(orig[1] + cumsum(c(0, rep(r[1], dm[1] - 1))))
-    yy <- unname(orig[2] + cumsum(c(0, rep(r[2], dm[2] - 1))))
-    return(spatstat::im(matrix(raster::values(im), ncol = dm[1], 
-                               nrow = dm[2], byrow = TRUE)[dm[2]:1, ], 
-                        xcol = xx, yrow = yy))
-  }
-  kernel.im <- raster.as.im(r)
+  kernel.im <- as.im(r)
   
   # select colony size info
   SPopulation <- as.character(unique(tracks$Population))
   SSpecies <- as.character(unique(tracks$Species))
-  Pop.size <- PopulationInfo[populationInfo$Species == SSpecies & populationInfo$Population == SPopulation,]$Pairs*2
+  Pop.size <- populationInfo[populationInfo$Species == SSpecies & populationInfo$Population == SPopulation,]$Pairs*2
   
-  # we're going to simulate a nº of points equal to the pop size * multi_factor
+  # we're going to simulate a nº of points equal to the pop size * multiFactor
   SimulateN <- Pop.size*multiFactor
   
   # this simulates the points as ppp
@@ -114,6 +102,6 @@ simulateDistribution <- function(tracks, populationInfo, scale, grid = 500, mult
                                          data = data.frame(Population = rep(SPopulation, length(SimPoints.sp)), 
                                                            Species = rep(SSpecies, length(SimPoints.sp))),
                                          proj4string = proj.UTM)
-  SimPoints.sp <- spTransform(SimPoints.sp, CRS(projections$WGS84))
+  SimPoints.sp <- spTransform(SimPoints.sp, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
   return(SimPoints.sp)
 }
