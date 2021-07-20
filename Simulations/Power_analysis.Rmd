@@ -1,37 +1,36 @@
 ---
 title: "Power test"
 author: "Morera-Pujol, Virginia"
-date: "March 2021"
+date: "July 2021"
 output: html_document
 ---
 
 ## Power analysis for the ISF test
 
-Testing the ability of the IndEffectTest function to detect ISF. The function was developed for the *Detecting recurrent sources of variability in animal tracking studies* manuscript by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021
+Testing the ability of the `indEffectTest()` function to detect ISF. The function was developed for the *Detecting recurrent sources of variability in animal tracking studies* manuscript by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021
 
 ### Description
 
 In this document, I will use the simulated datasets obtained following the steps in the *Demo_simulating_ISF_tracks* document, and the procedure described in the *Testing_IndEffectTest_function* document, to run the function over a sequence of datasets with increasing levels of individual site fidelity for data of both colonial and non-colonial simulated "species". To simulate the different degrees of ISF we change the resistance of the layer outside the "allowed" polygon.
 
 ```{r setup, include = F}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
-                      fig.width = 12, fig.height = 8, 
-                      root.dir = "C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
-knitr::opts_knit$set()
+knitr::opts_knit$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
+                     cache = TRUE, fig.width = 12, fig.height = 8)
 
-pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm,
-               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv)
-  
+install.packages("pacman", repos = "http://cran.us.r-project.org")
+pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm, doParallel, foreach, ggpubr,
+               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv, kableExtra)
+
 '%!in%' <- function(x,y)!('%in%'(x,y))
 ```
 
-### For animals with different origins
+## For animals with different origins
 
-#### Generating the data
+### Generating the data
 
 For more detail on this procedure, see the *Demo_simulating_ISF_tracks* in this repository
 
-```{r, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE}
+```{r PowerTest generate, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE, eval = F}
 set.seed(2020)
 CRW <- species(state.CRW(0.2))
 test <- simulate(CRW, coords = c(0, 0), time = 100)
@@ -125,19 +124,18 @@ for (j in seq_along(resistances)) {
 }
 ```
 
-#### Testing the function
+### Testing the function
 
-We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking.
+Plot first all the datasets used for the powertest
 
-```{r sensitivitytest1 run, message = FALSE, warning = FALSE}
-# first create a version of the data without BirdID to calculate trip overlaps 
-
+```{r PowerTest plots, message = FALSE, warning = FALSE, fig.width = 15, fig.height = 15}
 # plot the different datasets to compare ISF visually
 rdslist <- list.files(pattern = ".RDS")
 
 rdslist <- rdslist[grepl('simulated_dataset_noncolonial', rdslist)]
-
-for (j in seq_along(rdslist)) {
+plotlist <- list()
+# for (j in c(10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11)) {
+for(j in seq_along(rdslist)){  
   # j = 10
   
   load(rdslist[j])
@@ -145,7 +143,8 @@ for (j in seq_along(rdslist)) {
 
   sds %>% 
     dplyr::group_by(TrackID) %>%
-    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'), 
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
                                   length.out = 100)) %>% 
     mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
     dplyr::select(individual.local.identifier = TrackID, 
@@ -159,10 +158,13 @@ for (j in seq_along(rdslist)) {
     st_as_sf(coords = c("Longitude", "Latitude")) %>% 
     mutate(Ind = factor(as.character(Ind), levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))) %>% 
     mutate(Trip = factor(as.character(Trip), levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
+  plot_title <- paste0("Outside resistance ", 
+                       gsub("res", "", 
+                            strsplit(tools::file_path_sans_ext(rdslist[j]), "_")[[1]][[4]]))
   
   plt <- ggplot() + 
     geom_sf(data = sdf, aes(col = Ind), alpha = 0.3, size = 0.7) + 
-    xlab("Longitude") + ylab("Latitude") +
+    xlab("") + ylab("") +
     theme_bw() + 
     theme_bw() + 
     theme(legend.position = "right", legend.box = "horizontal") + 
@@ -170,34 +172,50 @@ for (j in seq_along(rdslist)) {
     coord_sf(xlim = c(-50, 50),
              ylim = c(-50, 50), expand = T) +
     # scale_shape(guide = "none") +
+    ggtitle(plot_title)
     NULL
-  
-  png(paste0(tools::file_path_sans_ext(rdslist[j]), ".png"),
-      height = 20*0.5, width = 22*0.5, units = "cm", res = 500)
-  print(plt)
-  dev.off()
-  
+  plotlist[j] <- list(plt)
+  names(plotlist)[j] <- plot_title
+  # print(plt)
   rm(simulated_dataset)
 }
 
+plotlist <- plotlist[
+  c("Outside resistance 0", "Outside resistance 0.1", "Outside resistance 0.2", 
+           "Outside resistance 0.3", "Outside resistance 0.4", "Outside resistance 0.5",
+           "Outside resistance 0.6", "Outside resistance 0.7", "Outside resistance 0.8",
+           "Outside resistance 0.9", "Outside resistance 1")]
+ggpubr::ggarrange(plotlist = plotlist, common.legend = T)
+
+```
+
+We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking.
+
+```{r PowerTest fun1, message = FALSE, warning = FALSE, eval = FALSE}
 # To calculate the overlap we:
 # 1 - Turn simulated tracks into "telemetry" objects"
 # 2 - fit a guesstimate movement model to each track
 # 3 - using the parameters of the guesstimate, fit a series of competing movement models
 # 4 - Calculate the debiased BA between top-selected models for each track
-# (uncertainty from the model fits is propagated into the overlap estimate under the approximation that the BA is a chi-square random variable)
+# (uncertainty from the model fits is propagated into the overlap estimate under the
+#     approximation that the BA is a chi-square random variable)
 
-results_list <- list()
-for (j in 2:length(rdslist)) {
-  Result <- list()
-  # j = 1
-  
-  load(rdslist[j])
+cl <- makeCluster(10, type="PSOCK") ## specify number of cores, and type of cluster (PSOCK or FORK)
+registerDoParallel(cl) ## register the backend into a virtual node
+
+# results_list <- list()
+## Execute parallel operation
+results_list <- foreach(j = 1:11, .packages=c("dplyr", "ctmm", "ggplot2", "lubridate")) %dopar% {
+          # for (j in seq_along(rdslist)) {
+          Result <- list()
+          # j = 1
+          load(rdslist[j])
   sds <- as.data.frame(simulated_dataset)
 
   sds %>% 
     dplyr::group_by(TrackID) %>%
-    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'), 
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
                                   length.out = 100)) %>% 
     mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
     dplyr::select(individual.local.identifier = TrackID, 
@@ -215,12 +233,13 @@ for (j in 2:length(rdslist)) {
   before <- Sys.time()
   
   for(i in 1:length(sd_tel)){
+  # for(i in 1:10){
     print(i)
     one <- sd_tel[[i]]
     # 2
     GUESS <- ctmm.guess(one, interactive=F)
     # 3
-    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
     print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
     FIT.list[[i]] <- FITS[[1]]
   }
@@ -228,9 +247,9 @@ for (j in 2:length(rdslist)) {
   
   # 4
   ov <- ctmm::overlap(FIT.list, level = 0.95)
-  # save(FIT.list, ov, file = paste("powerTest". j, ".RDS"))
   
-  # we select the "middle layer" of the array which contains the point estimate (for now ignoring the CI)
+  # we select the "middle layer" of the array which contains the point estimate 
+  # (for now ignoring the CI)
   X05 <- ov[,,2]
   Xlo <- ov[,,1]
   Xhi <- ov[,,3]
@@ -322,58 +341,59 @@ for (j in 2:length(rdslist)) {
   
   Result[4] <- list(proportions)
   
-  results_list[j] <- list(Result)
+  # results_list[j] <- list(Result)
   
   save(FIT.list, ov, Result, 
        file = paste("noncolonial_powerTest", strsplit(rdslist[j], "_")[[1]][4], sep = "_"))
 }
+stopCluster(cl)
+
 ```
 
-#### Explore sensitivity tests outputs
+### Explore sensitivity tests outputs
 
-```{r}
+```{r ISF test2 output}
 powertestfiles <- list.files(pattern = "noncolonial_powerTest")
 
 res_list <- list()
 plot_list <- list()
-for(i in seq_along(powertestfiles)) {
-  # i = 1
+for(i in c(10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11)) {
+  # i = 10
   load(powertestfiles[i])
   Test = str_sub(powertestfiles[i], end = -5)
   res <- Result[[4]]
   res2 <- cbind(Test, res)
- res_list[i] <- list(res2)
- plot_list[i] <- list(Result[[3]])
- names(plot_list)[i] <- Test
+  res_list[i] <- list(res2)
+  plot_list[i] <- list(Result[[3]])
+  names(plot_list)[i] <- Test
 }
 
 test_results <- bind_rows(res_list)
-test_results <- xx %>% 
-  pivot_wider(names_from = "WI_Median_Position", values_from = "Percentage")
 
-write.csv(test_results, "ISF_powerTest_noncolonial.csv", row.names = F)
+test_results %>% 
+  pivot_wider(names_from = "WI_Median_Position", values_from = "Percentage") %>% 
+  separate(Test, into = c("Type of test", "test", "Resistance"), sep = "_", remove = T) %>% 
+  mutate(Resistance = as.numeric(gsub("res", "", Resistance))) %>% 
+  arrange(Resistance) %>% 
+  dplyr::select("Resistance", "Above (WBR)" = "Above", "NotAbove") %>% 
+  kable(digits = 2, align = "rrrr", caption = "Power Test - noncolonial") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
 
-for(i in seq_along(plot_list)) {
-  # i = 1
-  p1 <- plot_list[[i]] + 
-    ggtitle(names(plot_list)[i])
-  print(p1)
-}
 ```
 
-### For animals with the same origin
+## For animals with the same origin
 
-#### Generating the data
+### Generating the data
 
 For more detail on this procedure, see the *Demo_simulating_ISF_tracks* in this repository
 
-```{r, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE}
+```{r PowerTest2 generate, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE, eval = FALSE}
 set.seed(205)
-CRW <- species(state.CRW(0.2))
+CRW <- species(state.CRW(0.1))
 test <- simulate(CRW, coords = c(0, 0), time = 100)
 
 # create empty base raster for resistance surfaces
-baseRaster <- raster(xmn = -50, xmx = 50, ymn = -50, ymx = 50, res = 0.1)
+baseRaster <- raster(xmn = -70, xmx = 70, ymn = -70, ymx = 70, res = 0.1)
 values(baseRaster) <- 1
 baseGrid <- as(baseRaster, "SpatialPixels")
 
@@ -386,39 +406,40 @@ template_UDs <- list()
 resistance_surfaces <- list()
 simulated_tracks <- list()
 
-plot(1, xlim = c(-50, 50), ylim = c(-50, 50), type = "n", 
+plot(1, xlim = c(-70, 70), ylim = c(-70, 70), type = "n", 
      main = "All the 'template' tracks")
 
-# 
 resistances <- c(1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0)
 
 for (j in seq_along(resistances)) {
-  # j = 1 
+  # j = 11
   res <- resistances[j]
   
-  for (i in 4:10) {
-    # i = 10
+  for (i in 1:10) {
+    # i = 1
     
     # First we need to create a template trip to get the UD for the resistance surface
     template <- simulate(CRW, coords = c(0, 0), angles = angles[i], time = 1000)
+    template <- as.data.frame(template)
+    template <- template %>% 
+      filter(V1 > -60 & V1 < 60) %>% 
+      filter(V2 > -60 & V2 < 60)
+    
     template_tracks[i] <- list(template)
     lines(template, col = brewer.pal(10,"Set3")[i])
     points(template, col = brewer.pal(10,"Set3")[i], pch = 16)
     spTemplate <- SpatialPoints(coords = template[,1:2], proj4string = baseGrid@proj4string)
-    KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid) 
+    
+    print(i)
+    KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid, extent = 2) 
     UD50 <- getverticeshr(KDE, percent = 50)
     template_UDs[i] <- list(UD50) 
-    # plot(KDE)
-    # plot(UD50, add = T)
-    # plot(spTemplate, pch = 20, cex = 0.5, add = T)
     
     # Second, we create the resistance surface
     res_surface <- resistanceFromShape(UD50, baseRaster = baseRaster, field = 0, 
                                        binary = F, background = 1)
     res_surface[res_surface == 1] <- res
-    # plot(res_surface)
     resistance_surfaces[i] <- list(res_surface)
-    # plot(res_surface)
     
     # Third, we simulate 10 tracks from each surface (i.e. from each individual)
     sim_tracks <- simulate(list(CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW), 
@@ -441,9 +462,6 @@ for (j in seq_along(resistances)) {
     spSim@proj4string <- baseGrid@proj4string
     simulated_tracks[i] <- list(spSim)
     spSim$BirdID <- NULL
-    # KUD_sim <- kernelUD(spSim, grid = baseGrid)
-    # print(mean(kerneloverlap(spSim, method = "BA", percent = 50, conditional = T)))
-    # plot(spSim, add = T, col = factor(spSim$TrackID), pch = ".", cex = 0.1)
   }
   
   list.df <- lapply(seq_along(simulated_tracks),
@@ -459,20 +477,92 @@ for (j in seq_along(resistances)) {
 }
 ```
 
-#### Testing the function
+### Testing the function
 
-We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking.
+Plot first all the datasets used for the powertest
 
-```{r sensitivitytest1 run, message = FALSE, warning = FALSE}
-# first create a version of the data without BirdID to calculate trip overlaps 
-
+```{r PowerTest plots2, message = FALSE, warning = FALSE, fig.width = 15, fig.height = 15}
 # plot the different datasets to compare ISF visually
 rdslist <- list.files(pattern = ".RDS")
 
 rdslist <- rdslist[grepl('simulated_dataset_colonial', rdslist)]
 
-results_list <- list()
-for (j in 2:length(rdslist)) {
+plotlist <- list()
+for (j in seq_along(rdslist)) {
+  # j = 1
+  
+  load(rdslist[j])
+  sds <- as.data.frame(simulated_dataset)
+
+  sds %>% 
+    dplyr::group_by(TrackID) %>%
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
+                                  length.out = 100)) %>% 
+    mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+    dplyr::select(individual.local.identifier = TrackID, 
+                  Longitude = coords.x1, Latitude = coords.x2, 
+                  datetime = Date_Time) %>% 
+    ungroup() -> sds
+  sds <- as.data.frame(sds)
+  
+  sdf <- sds %>% 
+    separate(individual.local.identifier, c("Ind", "Trip")) %>% 
+    st_as_sf(coords = c("Longitude", "Latitude")) %>% 
+    mutate(Ind = factor(as.character(Ind), levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))) %>% 
+    mutate(Trip = factor(as.character(Trip), levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
+  
+  plot_title <- paste0("Outside resistance ", 
+                       gsub("res", "", 
+                            strsplit(tools::file_path_sans_ext(rdslist[j]), "_")[[1]][[4]]))
+  
+  plt <- ggplot() + 
+    geom_sf(data = sdf, aes(col = Ind), alpha = 0.3, size = 0.7) + 
+    xlab("") + ylab("") +
+    theme_bw() + 
+    theme_bw() + 
+    theme(legend.position = "right", legend.box = "horizontal") + 
+    guides(col = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    coord_sf(xlim = c(-50, 50),
+             ylim = c(-50, 50), expand = T) +
+    # scale_shape(guide = "none") +
+    ggtitle(plot_title)
+    NULL
+  plotlist[j] <- list(plt)
+  names(plotlist)[j] <- plot_title
+  # print(plt)
+  rm(simulated_dataset)
+}
+
+plotlist <- plotlist[
+  c("Outside resistance 0", "Outside resistance 0.1", "Outside resistance 0.2", 
+           "Outside resistance 0.3", "Outside resistance 0.4", "Outside resistance 0.5",
+           "Outside resistance 0.6", "Outside resistance 0.7", "Outside resistance 0.8",
+           "Outside resistance 0.9", "Outside resistance 1")]
+ggpubr::ggarrange(plotlist = plotlist, common.legend = T)
+
+```
+
+We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking.
+
+```{r PowerTest2 fun1, message = FALSE, warning = FALSE, eval = FALSE}
+# To calculate the overlap we:
+# 1 - Turn simulated tracks into "telemetry" objects"
+# 2 - fit a guesstimate movement model to each track
+# 3 - using the parameters of the guesstimate, fit a series of competing movement models
+# 4 - Calculate the debiased BA between top-selected models for each track
+# (uncertainty from the model fits is propagated into the overlap estimate under the
+#     approximation that the BA is a chi-square random variable)
+rdslist <- list.files(pattern = ".RDS")
+
+rdslist <- rdslist[grepl('simulated_dataset_colonial', rdslist)]
+
+cl <- makeCluster(10, type="PSOCK") ## specify number of cores, and type of cluster (PSOCK or FORK)
+registerDoParallel(cl) ## register the backend into a virtual node
+
+# results_list <- list()
+## Execute parallel operation
+results_list <- foreach(j = 1:11, .packages=c("dplyr", "ctmm", "ggplot2", "lubridate")) %dopar% {
   Result <- list()
   # j = 1
   
@@ -481,7 +571,8 @@ for (j in 2:length(rdslist)) {
 
   sds %>% 
     dplyr::group_by(TrackID) %>%
-    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'), 
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
                                   length.out = 100)) %>% 
     mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
     dplyr::select(individual.local.identifier = TrackID, 
@@ -504,7 +595,7 @@ for (j in 2:length(rdslist)) {
     # 2
     GUESS <- ctmm.guess(one, interactive=F)
     # 3
-    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
     print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
     FIT.list[[i]] <- FITS[[1]]
   }
@@ -512,9 +603,9 @@ for (j in 2:length(rdslist)) {
   
   # 4
   ov <- ctmm::overlap(FIT.list, level = 0.95)
-  # save(FIT.list, ov, file = paste("powerTest". j, ".RDS"))
-  
-  # we select the "middle layer" of the array which contains the point estimate (for now ignoring the CI)
+
+  # we select the "middle layer" of the array which contains the point estimate 
+  # (for now ignoring the CI)
   X05 <- ov[,,2]
   Xlo <- ov[,,1]
   Xhi <- ov[,,3]
@@ -580,8 +671,7 @@ for (j in 2:length(rdslist)) {
     Test = rdslist[j]
     )
   Result[2] <- list(Overlaps)
-  # plot boxplot
-  
+
   plot1 <- ggplot(data = Overlaps) + 
     geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
     ggtitle("Density of within individual vs. between individual median overlaps") +
@@ -611,11 +701,12 @@ for (j in 2:length(rdslist)) {
   save(FIT.list, ov, Result, 
        file = paste("colonial_powerTest", strsplit(rdslist[j], "_")[[1]][4], sep = "_"))
 }
+stopCluster(cl)
 ```
 
-#### Explore sensitivity tests outputs
+### Explore sensitivity tests outputs
 
-```{r}
+```{r PowerTest2 results}
 powertestfiles <- list.files(pattern = "^colonial_powerTest")
 
 res_list <- list()
@@ -632,16 +723,14 @@ for(i in seq_along(powertestfiles)) {
 }
 
 test_results <- bind_rows(res_list)
-test_results <- test_results %>% 
-  pivot_wider(names_from = "WI_Median_Position", values_from = "Percentage")
 
-write.csv(test_results, "ISF_powerTest_colonial.csv", row.names = F)
-
-for(i in seq_along(plot_list)) {
-  # i = 1
-  p1 <- plot_list[[i]] + 
-    ggtitle(names(plot_list)[i])
-  print(p1)
-}
+test_results %>% 
+  pivot_wider(names_from = "WI_Median_Position", values_from = "Percentage") %>% 
+  separate(Test, into = c("Type of test", "test", "Resistance"), sep = "_", remove = T) %>% 
+  mutate(Resistance = as.numeric(gsub("res", "", Resistance))) %>% 
+  arrange(Resistance) %>% 
+  dplyr::select("Resistance", "Above (WBR)" = "Above", "NotAbove") %>% 
+  kable(digits = 2, align = "rrrr", caption = "Power Test - colonial") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+  
 ```
-
