@@ -1,7 +1,7 @@
 ---
 title: "Effect of sampling frequency on ISF test"
 author: "Virginia Morera-Pujol"
-date: "May 2021"
+date: "July 2021"
 output: html_document
 ---
 
@@ -14,23 +14,21 @@ Testing the ability of the IndEffectTest function to detect ISF at different sam
 Here, we use the dataset of the non-colonial simulated species with a 1 resistance surface (high ISF). From it, we will subset every fifth position, and then every tenth, and compare the results of the individual site fidelity test. 
 
 ```{r setup, include = F}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
-                      fig.width = 12, fig.height = 8)
-knitr::opts_knit$set(root.dir = "C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
+knitr::opts_knit$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
+                     cache = TRUE, fig.width = 12, fig.height = 8)
 
-# setwd("C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
+install.packages("pacman", repos = "http://cran.us.r-project.org")
+pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm, doParallel, foreach, ggpubr,
+               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv, kableExtra)
 
-pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm,
-               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv)
-  
 '%!in%' <- function(x,y)!('%in%'(x,y))
 
-load("C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest/simulated_dataset_noncolonial_res1.RDS")
+load("simulated_dataset_noncolonial_res1.RDS")
 ```
 
-#### First test ISF with the full simulated dataset of high ISF
+## Test ISF with the full simulated dataset of high ISF
 
-```{r, cache = TRUE, message = FALSE, warning = FALSE, collapse = TRUE}
+```{r samplingFreq test, cache = TRUE, message = FALSE, warning = FALSE, collapse = TRUE, eval = FALSE}
 sds <- as.data.frame(simulated_dataset)
 
 sds %>% 
@@ -60,7 +58,7 @@ for(i in 1:length(sd_tel)){
   # 2
   GUESS <- ctmm.guess(one, interactive=F)
   # 3
-  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
   # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
   FIT.list[[i]] <- FITS[[1]]
 }
@@ -151,13 +149,12 @@ names(proportions) <- c("WI_Median_Position", "Percentage")
 proportions$Percentage <- round(proportions$Percentage*100, 2)
 
 proportions_wide1 <- spread(proportions, WI_Median_Position, Percentage)
-
+write.csv(proportions_wide1, file = "proportions_wide1.csv", row.names = F)
 ```
 
+## With the same dataset but subset just one every 5 positions
 
-#### With the same dataset but subset just one every 5 positions
-
-```{r, cache = TRUE, message = FALSE, warning = FALSE}
+```{r samplingFreq test2, cache = TRUE, message = FALSE, warning = FALSE, eval = FALSE}
 
 # turn to sf for easy subsetting and subset
 
@@ -197,7 +194,7 @@ for(i in 1:length(sd_tel)){
   # 2
   GUESS <- ctmm.guess(one, interactive=F)
   # 3
-  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
   # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
   FIT.list[[i]] <- FITS[[1]]
 }
@@ -288,12 +285,12 @@ names(proportions) <- c("WI_Median_Position", "Percentage")
 proportions$Percentage <- round(proportions$Percentage*100, 2)
 
 proportions_wide2 <- spread(proportions, WI_Median_Position, Percentage)
+write.csv(proportions_wide2, file = "proportions_wide2.csv", row.names = F)
 ```
 
-#### With the same dataset but subset just one every 10 positions
+## With the same dataset but subset just one every 10 positions
 
-```{r, cache = TRUE, message = FALSE, warning = FALSE}
-
+```{r samplingFreq test3, cache = TRUE, message = FALSE, warning = FALSE, eval = FALSE}
 # turn to sf for easy subsetting and subset
 
 sim_10th <- st_as_sf(simulated_dataset) %>%
@@ -330,7 +327,7 @@ for(i in 1:length(sd_tel)){
   # 2
   GUESS <- ctmm.guess(one, interactive=F)
   # 3
-  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
   # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
   FIT.list[[i]] <- FITS[[1]]
 }
@@ -421,25 +418,23 @@ names(proportions) <- c("WI_Median_Position", "Percentage")
 proportions$Percentage <- round(proportions$Percentage*100, 2)
 
 proportions_wide3 <- spread(proportions, WI_Median_Position, Percentage)
+write.csv(proportions_wide3, file = "proportions_wide3.csv", row.names = F)
 ```
 
-#### Compare the results
+## Compare the results
 
-```{r, message = FALSE, warning = FALSE, fig.width = 12, fig.height = 12}
-final_df <- bind_rows(
-  proportions_wide1, proportions_wide2, proportions_wide3
-)
+```{r samplingFreq compare, message = FALSE, warning = FALSE, fig.width = 12, fig.height = 12}
+prop_files <- list.files(pattern = "proportions_wide")
+prop_list <- map(prop_files, read.csv)
 
-final_df$test <- c("original", "every_5th", "every_10th")
+final_df <- bind_rows(prop_list)
+
+final_df$Test <- c("original", "every 5th", "every 10th")
 
 final_df %>%
+  dplyr::select("Test", "Above (WBR)" = "Above..WBR.", "NotAbove") %>% 
   kable(digits = 2, align = "rrrr", caption = "Test sampling frequency") %>%
   kable_classic(full_width = F, html_font = "Cambria")
-# write.csv(final_df, file = "compare_frequencies.csv", row.names = F)
-
-# png(filename = "compare_frequencies.png", width = 15, height = 15*1.2, units = "cm", res = 900)
-cowplot::plot_grid(plotFull, plot1, plot2, ncol = 2)
-# dev.off()
 ```
 
 
