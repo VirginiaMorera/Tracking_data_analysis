@@ -1,24 +1,39 @@
-### bootstrap colony effect ####
+# Developed for the manuscript *Detecting recurrent sources of variability in animal tracking studies* by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021.
 
-# Tracks: Tracking data. DF or SPDF, containing Latitude, Longitude, Species and Population
+### bootstrapColony function ####
+# tracks: Tracking data. DF or SPDF, containing Latitude, Longitude, Species and Population
 # simulatedDistributions: DF or SPDF containing the simulated distribution of the studied 
 #   species, with at least the columns Longitude, Latitude, Population and Species. Can be directly the output of the simulateDistribution() function
 # tripID: unique identifier for each trip 
-# UDLev: Numeric, Utilisation Distribution Level. Level of the KDE to be selected. For example, if 50 is used, the overlap is calculated between the 
+# udLev: Numeric, Utilisation Distribution Level. Level of the KDE to be selected. For example, if 50 is used, the overlap is calculated between the 
 #   smallest areas for which the probability to find the animal is equal to 0.50 (but see explanation for argument "conditional". From the adehabitatHR::kerneloverlap() function.
 # scale is the smoothing factor to be used in the Kernel Density Estimation (in Km)
-# Grid is a number giving the size of the grid on which the UD should be estimated. 
+# grid is a number giving the size of the grid on which the UD should be estimated. 
 # iterations:  Numeric, number of iterations for the bootstrap
 
 bootstrapColony <- function(tracks, simulatedDistributions, tripId, udLev = 50, scale, grid = 500, iterations = 50){
-  require(sp)
-  require(geosphere)
-  require(rgdal)
-  require(adehabitatHR)
-  require(foreach)
-  require(doParallel)
-  require(parallel)
+   
+   # package dependencies
+   if (!requireNamespace("sp", quietly = TRUE)) {
+    stop("Package \"sp\" needed for  function to work. Please install.",
+         call. = FALSE)  }
+   if (!requireNamespace("geosphere", quietly = TRUE)) {
+    stop("Package \"geosphere\" needed for  function to work. Please install.",
+         call. = FALSE)  }
+   if (!requireNamespace("rgdal", quietly = TRUE)) {
+    stop("Package \"rgdal\" needed for  function to work. Please install.",
+         call. = FALSE)  }
+   if (!requireNamespace("adehabitatHR", quietly = TRUE)) {
+      stop("Package \"adehabitatHR\" needed for  function to work. Please install.",
+           call. = FALSE)  }  require(foreach)
+   if (!requireNamespace("doParallel", quietly = TRUE)) {
+    stop("Package \"doParallel\" needed for  function to work. Please install.",
+         call. = FALSE)  }
+   if (!requireNamespace("parallel", quietly = TRUE)) {
+    stop("Package \"parallel\" needed for  function to work. Please install.",
+         call. = FALSE)  }
   
+  # initial checks
   tracks$tripId <- tracks[,tripId]
   if (!"Latitude" %in% names(tracks)) stop("Latitude field does not exist")
   if (!"Longitude" %in% names(tracks)) stop("Longitude field does not exist")
