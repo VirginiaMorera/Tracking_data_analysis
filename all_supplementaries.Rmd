@@ -1,0 +1,2150 @@
+---
+title: "Detecting recurrent sources of variability in animal tracking studies"
+subtitle: "Online supplementary material"
+author: "Morera-Pujol, Virginia"
+date: "June 2021"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+---
+
+This document contains all the supplementary material of the manuscript *Detecting recurrent sources of variability in animal tracking studies* by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021.
+
+```{r setup, include = F}
+knitr::opts_knit$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
+                     cache = TRUE, fig.width = 12, fig.height = 8)
+
+install.packages("pacman", repos = "http://cran.us.r-project.org")
+pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm, doParallel, foreach, ggpubr,
+               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv, kableExtra)
+
+'%!in%' <- function(x,y)!('%in%'(x,y))
+```
+
+# Simulating animal tracks
+
+This section shows how to generate, using the package `SIMRiv`, simulated animal movement tracks to test the detection of Individual Site Fidelity by the test developed for the MS "Detecting recurrent sources of variability in animal tracking studies", by Virginia Morera-Pujol et al. (2020)
+
+## Simulate template track
+
+First, simulate a correlated RW. We've tried to simulate a Lévy Walk but since ideally we're not using commuting points in our real-data analysis, CRW looks more similar to a real dataset
+
+```{r randomwalk demo, echo = TRUE, message = FALSE, warning = FALSE, results = 'hide'}
+CRW15 <- species(state.CRW(0.25) + 7)
+simCRW <- simulate(CRW15, coords = matrix(rep(0, 2), ncol = 2), time = 10000)
+plot(simCRW[,1:2], type = "l", 
+     xlim = c(min(simCRW[,1]), max(simCRW[,1])), 
+     ylim = c(min(simCRW[,2]), max(simCRW[,2])), 
+     main = "Simulation of a correlated random walk with 10,000 steps")
+
+spSimCRW <- SpatialPoints(coords = simCRW[,1:2])
+```
+
+## Turn template into resistance surface
+
+Then, generate a convex hull of that correlated RW
+
+```{r convexhull demo, results = 'hide', echo = TRUE, message = FALSE, warning = FALSE}
+example_MCP <- mcp(spSimCRW, percent = 100)
+plot(example_MCP, main = "100% Minimum convex polygon of the simulated CRW")
+plot(spSimCRW, add = T, pch = 20, cex = 0.5, col = "gray")
+```
+
+Convert this convex hull into a resistance surface from SiMRiv to limit distribution of newly simulated tracks
+
+```{r resistancesurface demo, echo = TRUE, message = FALSE, warning = FALSE}
+res_surface <- resistanceFromShape(example_MCP, res = 1, margin = c(500, 500))
+plot(res_surface, main = "Resistance surface generated from the previous MCP")
+```
+
+## Simulate tracks within the resistance surface
+
+Now simulate tracks within the resistance shape
+
+```{r simulate demo,  echo = TRUE, message = FALSE, warning = FALSE}
+simCRW_res <- simulate(list(CRW15, CRW15, CRW15, CRW15), coords = matrix(rep(0, 8), 
+                                                                         ncol = 2), 
+                       time = 10000, resist = res_surface)
+spSimCRW_res <- SpatialPointsDataFrame(coords = cbind(c(simCRW_res[,1], simCRW_res[,4], 
+                                                        simCRW_res[,7], simCRW_res[,10]),
+                                                      c(simCRW_res[,2], simCRW_res[,5], 
+                                                        simCRW_res[,8], simCRW_res[,11])),
+                                       data = data.frame(ID = c(rep(1, 10000), 
+                                                                rep(2, 10000), 
+                                                                rep(3, 10000),
+                                                                rep(4, 10000))))
+
+plot(res_surface, 
+     main = "Simulated tracks within the MCP \nthrough the resistance surface")
+plot(spSimCRW_res, pch = 20, cex = 0.5, add = T, col = spSimCRW_res$ID)
+```
+
+This is the basic workflow to generate simulated datasets displaying individual site fidelity. Different levels of fidelity can be simulated by changing the resistance values outside the convex hull. The higher the resistance, the more intense the "fidelity". We are going to use it to generate different types of data to test aspects of the indEffectTest function developed for the manuscript.
+
+# Individual site fidelity test
+
+Using the procedure outlined in the previous section, we'll generate first a dataset of 10 individuals with 10 trips each, with different origins, and then a dataset of 10 individuals with 10 trips each with the same origin (central place forager scenario) to test how the `indEffect_test()` function works.
+
+## For animals with different origins
+
+### Generating the data
+
+We use a value for resistance = 1, which means we're simulating maximum ISF (simulated tracks are forced within the template area of no resistance because resistance outside the template area is 1).
+
+```{r ISF test generate prepare,  results = 'hide', echo = TRUE, message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE}
+set.seed(123)
+# set movement parameters of the "species". 
+# We're going to configure a Correlated Random walker
+CRW <- species(state.CRW(0.3))
+test <- simulate(CRW, coords = c(10, 15), time = 100)
+
+# create empty base raster for resistance surfaces
+baseRaster <- raster(xmn = -50, xmx = 50, ymn = -50, ymx = 50, res = 0.1)
+values(baseRaster) <- 1
+baseGrid <- as(baseRaster, "SpatialPixels")
+baseGrid@proj4string <- CRS(as.character(NA))
+
+# generate 10 random origin points within a 100000x100000 square, one per "individual"
+origin_points <- data.frame(x = runif(10, -25, 25), 
+                            y = runif(10, -25, 25))
+
+# simulate 10 trips for each origin (i.e. 10 trips per individual)
+template_tracks <- list()
+template_UDs <- list()
+resistance_surfaces <- list()
+simulated_tracks <- list()
+
+for (i in 1:10) {
+  # i = 2
+  # First we need to create a template trip to get the UD for the resistance surface
+  template <- simulate(CRW, coords = c(origin_points[i,1], origin_points[i, 2]), 
+                       time = 100)
+  template_tracks[i] <- list(template)
+  
+  spTemplate <- SpatialPoints(coords = template[,1:2], proj4string = baseGrid@proj4string)
+  KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid, extent = 2) 
+  UD50 <- getverticeshr(KDE, percent = 50)
+  template_UDs[i] <- list(UD50) 
+  
+  # Second, we create the resistance surface
+  res_surface <- resistanceFromShape(UD50, baseRaster = baseRaster, field = 0, 
+                                     background = 1)
+  resistance_surfaces[i] <- list(res_surface)
+  
+  # Third, we simulate 10 tracks from each surface (i.e. from each individual)
+  sim_tracks <- simulate(list(CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW), 
+                         start.resistance	= 0,
+                         time = 100, resist = res_surface)
+  spSim <- SpatialPointsDataFrame(coords = cbind(c(sim_tracks[,1], sim_tracks[,4], 
+                                                   sim_tracks[,7], sim_tracks[,10], 
+                                                   sim_tracks[,13],sim_tracks[,16],
+                                                   sim_tracks[,19], sim_tracks[,22], 
+                                                   sim_tracks[,25], sim_tracks[,28]),
+                                               c(sim_tracks[,2], sim_tracks[,5], 
+                                                 sim_tracks[,8], sim_tracks[,11], 
+                                                 sim_tracks[,14], sim_tracks[,17],
+                                                 sim_tracks[,20], sim_tracks[,23], 
+                                                 sim_tracks[,26], sim_tracks[,29])), 
+                                data = data.frame(TrackID = paste(i, 
+                                                                  rep(1:10, each = 100),
+                                                                  sep = "_"), 
+                                                  BirdID = rep(i, 1000)))
+  spSim@proj4string <- baseGrid@proj4string
+  simulated_tracks[i] <- list(spSim)
+  spSim$BirdID <- NULL
+  KUD_sim <- kernelUD(spSim, grid = baseGrid)
+  
+}
+```
+
+Now the list `simulated_tracks` has 10 elements, each of them containing the 10 tracks belonging to each "individual". We need to reformat that in a way that we can proceed with the Individual Effect Test
+
+```{r ISF test process, results='hide', echo = TRUE, message=FALSE, warning=FALSE, fig.show='hide'}
+list.df <- lapply(seq_along(simulated_tracks),
+                  function(i){simulated_tracks[i][[1]]})
+
+# apply rbind to the list
+simulated_dataset <- do.call("rbind",
+                             list.df)
+# assign null projection as X/Y values don't mean anything in this case
+simulated_dataset@proj4string <- CRS(as.character(NA))
+```
+
+### Visualising the data
+
+```{r ISF test visualise, results='hide', echo = TRUE, message=FALSE, warning=FALSE, fig.width=10.5, fig.height=7}
+# first create a version of the data without BirdID to calculate trip overlaps 
+sds <- as.data.frame(simulated_dataset)
+
+# convert it in order to be able to plot it 
+sdf <- sds %>% 
+  st_as_sf(coords = c("coords.x1", "coords.x2")) %>% 
+  tidyr::separate(TrackID, into = c("BirdID", "TrackID"), sep = "_") %>% 
+  mutate(BirdID = factor(BirdID, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10")))
+
+col1 <- ggplot() + 
+  geom_sf(data = sdf, aes(col = BirdID), alpha = 0.3, size = 0.7) + 
+  xlab("Longitude") + ylab("Latitude") +
+  # scale_shape_manual(values = 1:10, guide = "none") +
+  theme_bw() + 
+  theme(legend.position = "right", legend.box = "horizontal") + 
+  guides(col = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+  # scale_shape(guide = "none") +
+  ggtitle("Simulated positions of 10 non-colonial animals") + 
+  NULL 
+print(col1)
+```
+
+### Testing the function
+
+We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking.
+
+#### Calculate akde for all tracks and pairwise overlaps
+
+```{r ISF test fun1 run, message = FALSE, warning = FALSE, cache = TRUE, echo = TRUE, eval = FALSE}
+# To calculate the overlap we:
+# 1 - Turn simulated tracks into "telemetry" objects"
+# 2 - fit a guesstimate movement model to each track
+# 3 - using the parameters of the guesstimate, fit a series of competing movement models
+# 4 - Calculate the debiased BA between top-selected models for each track
+# (uncertainty from the model fits is propagated into the overlap estimate under the
+#    approximation that the BA is a chi-square random variable)
+
+# 1
+sds %>% 
+  dplyr::group_by(TrackID) %>%
+  dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'),
+                                length.out = 100)) %>% 
+  mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+  dplyr::select(individual.local.identifier = TrackID, 
+                Longitude = coords.x1, Latitude = coords.x2, 
+                datetime = Date_Time) %>% 
+  ungroup() -> sds
+sds <- as.data.frame(sds)
+
+sdst <- sds %>% 
+  filter(str_detect(individual.local.identifier, "^7")) 
+
+# to remove output from console
+message_filename = 'ISF_test_fun1_run_console_output.txt'
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+
+sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+
+# FIT.list <- list()
+cl <- makeCluster(10, type="PSOCK") ## specify number of cores, and type of cluster (PSOCK or FORK)
+registerDoParallel(cl) ## register the backend into a virtual node
+
+before <- Sys.time()
+
+## Execute parallel operation
+FIT.list <- foreach(i = 1:length(sd_tel), .packages=c("dplyr", "ctmm", "ggplot2", "lubridate")) %dopar% {
+  # print(i)
+  one <- sd_tel[[i]]
+  # 2
+  GUESS <- ctmm.guess(one, interactive=F)
+  # 3
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
+  print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+  x <- FITS[[1]]
+}
+sink()
+
+Sys.time() - before
+
+# 4
+ov <- ctmm::overlap(FIT.list, level = 0.95)
+save(FIT.list, ov, file = "testing_function.RDS")
+```
+
+
+#### Obtain median, lower and upper bounds of CI of the overlap and name the matrices with the "BirdID"
+
+The array `ov` contains three "layers", with the median of the overlap distribution in the middle one, and the upper and lower bounds of the CI selected in de function in the first and last. We extract the three matrices from there
+
+```{r ISF test fun2, message = FALSE, warning = FALSE, echo = TRUE}
+load("testing_function.RDS")
+# separate the layers of the median and CI
+X05 <- ov[,,2]
+Xlo <- ov[,,1]
+Xhi <- ov[,,3]
+
+# remove lower triangle of each (repeated values since it's a symetric matrix)
+X05[lower.tri(X05, diag = T)] <- NA
+Xlo[lower.tri(Xlo, diag = T)] <- NA
+Xhi[lower.tri(Xhi, diag = T)] <- NA
+
+
+# assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+rownames(X05) <- colnames(X05) <- gid
+rownames(Xlo) <- colnames(Xlo) <- gid
+rownames(Xhi) <- colnames(Xhi) <- gid
+```
+
+
+#### Separate within (WI) and between (BW) group overlaps
+
+The function works by testing how many of the Between Individual overlap CIs contain the median of all the within individual overlaps. It provides three values, the proportion of between individual overlap CIs that contain the median of the WI overlaps, the proportion of BW overlap CIs in which the median of the WI overlaps falls outside of the BW and is higher (above) and the proportion in which is lower (below).
+
+```{r ISF test fun3,  message = FALSE, warning = FALSE, echo = TRUE}
+# median
+WI05 <- NULL
+BW05 <- NULL
+
+# BW lower and higher CI bounds
+BWlo <- NULL
+BWhi <- NULL
+
+for (i in seq_along(rownames(X05))) {
+  # i = 2
+  
+  # medians
+  x1 <- X05[i,] 
+  x2 <- x1[which(names(x1) == rownames(X05)[i])]
+  x3 <- x1[which(names(x1) != rownames(X05)[i])]
+  
+  WI05 <- c(WI05, x2)
+  BW05 <- c(BW05, x3)
+  
+  # BW intervals
+  y1 <- Xlo[i,] 
+  y2 <- y1[which(names(y1) != rownames(Xlo)[i])]
+  BWlo <- c(BWlo, y2)
+  
+  z1 <- Xhi[i,] 
+  z2 <- z1[which(names(z1) != rownames(Xhi)[i])]
+  BWhi <- c(BWhi, z2)
+  
+}
+
+# remove NAs
+WI05 <- WI05[!is.na(WI05)]
+BW05 <- BW05[!is.na(BW05)]
+BWlo <- BWlo[!is.na(BWlo)]
+BWhi <- BWhi[!is.na(BWhi)]
+
+# organize values in a dataframe for plotting
+Overlaps <- data.frame(
+  Overlap = c(WI05, BW05),
+  Type = c(rep("Within", length(WI05)), rep("Between", length(BW05)))
+)
+```
+
+### Visualising results
+
+First of all we visualise the different densities of the WI and BW medians (without taking into account CI of individual overlaps)
+
+```{r ISF test fun4,  message = FALSE, warning = FALSE, echo = TRUE}
+(plot <- ggplot(data = Overlaps) + 
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
+  ggtitle("Density of within individual vs. between individual median overlaps") +
+  theme_bw())
+```
+
+### Calculating the WBR (Within-Between ratio)
+
+Now we calculate the median of the WI overlaps, to use as reference values (see if it is contained, above or below the BW CIs)
+
+```{r ISF test fun5,  message = FALSE, warning = FALSE, echo = TRUE}
+WI_median <- quantile(WI05, 0.5)
+
+BWint <- data.frame(Low = BWlo,
+                    High = BWhi)
+```
+
+Finally we produce a one row dataset containing the proportion of Between individual overlaps in which the Within Individual median is below, inside or above the CI.
+
+```{r ISF test fun6,  message = FALSE, warning = FALSE, echo = TRUE}
+BWint <- BWint %>% 
+    mutate(Contains = "NA") %>% 
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+  
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+proportions_wide <- spread(proportions, WI_Median_Position, Percentage)
+
+proportions_wide %>% 
+  kable(digits = 2, align = "rrrr") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+The Within-Between Ratio (WBR) is the percenatge of the cases in which the median of the Within Individual overlaps falls above the 95% CI of the between individual overlap distribution. A high WBR indicates that, when run on an artificial dataset, purposely simulating a high degree of individual site fidelity, our function is able to detect individual site fidelity in the simulated dataset.
+
+## For animals with the same origin but different outward angles
+
+### Generating the data
+
+In case of foraging trips of central place foragers, all trips will have the same origin. We create a dataset that simulates those conditions too, to see if the indEffectTest function is still able to detect individual site fidelity.
+
+Again, we simulate the dataset with resistance = 1, which will simulate high ISF conditions
+
+```{r ISF test2 generate data, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE, echo = TRUE}
+set.seed(2106)
+CRW <- species(state.CRW(0.2))
+test <- simulate(CRW, coords = c(0, 0), time = 100)
+
+# create empty base raster for resistance surfaces
+baseRaster <- raster(xmn = -50, xmx = 50, ymn = -50, ymx = 50, res = 0.1)
+values(baseRaster) <- 1
+baseGrid <- as(baseRaster, "SpatialPixels")
+
+# create a vector of random angles
+angles <- runif(10, 0, 360)
+# simulate 10 trips for each origin (i.e. 10 trips per individual)
+template_tracks <- list()
+template_UDs <- list()
+resistance_surfaces <- list()
+simulated_tracks <- list()
+
+for (i in 1:10) {
+  # i = 1
+  
+  # First we need to create a template trip to get the UD for the resistance surface
+  template <- simulate(CRW, coords = c(0, 0), angles = angles[i], time = 100)
+  template_tracks[i] <- list(template)
+  spTemplate <- SpatialPoints(coords = template[,1:2], proj4string = baseGrid@proj4string)
+  KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid) 
+  UD50 <- getverticeshr(KDE, percent = 50)
+  template_UDs[i] <- list(UD50) 
+  # plot(KDE)
+  # plot(UD50, add = T)
+  # plot(spTemplate, pch = 20, cex = 0.5, add = T)
+  
+  # Second, we create the resistance surface
+  res_surface <- resistanceFromShape(UD50, baseRaster = baseRaster, field = 0, 
+                                     background = 1)
+  resistance_surfaces[i] <- list(res_surface)
+  # plot(res_surface)
+  
+  # Third, we simulate 10 tracks from each surface (i.e. from each individual)
+  sim_tracks <- simulate(list(CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW), 
+                         start.resistance	= 0,
+                         time = 100, resist = res_surface)
+  spSim <- SpatialPointsDataFrame(coords = cbind(c(sim_tracks[,1], sim_tracks[,4],
+                                                   sim_tracks[,7], sim_tracks[,10],
+                                                   sim_tracks[,13], sim_tracks[,16],
+                                                   sim_tracks[,19], sim_tracks[,22],
+                                                   sim_tracks[,25],sim_tracks[,28]),
+                                                 c(sim_tracks[,2], sim_tracks[,5],
+                                                   sim_tracks[,8], sim_tracks[,11],
+                                                   sim_tracks[,14],sim_tracks[,17],
+                                                   sim_tracks[,20], sim_tracks[,23],
+                                                   sim_tracks[,26], sim_tracks[,29])), 
+                                  data = data.frame(TrackID = paste(i, rep(1:10, 
+                                                                           each = 100),
+                                                                    sep = "_"), 
+                                                  BirdID = rep(i, 1000)))
+  spSim@proj4string <- baseGrid@proj4string
+  simulated_tracks[i] <- list(spSim)
+  spSim$BirdID <- NULL
+  KUD_sim <- kernelUD(spSim, grid = baseGrid)
+    # print(mean(kerneloverlap(spSim, method = "BA", percent = 50, conditional = T)))
+  # plot(spSim, add = T, col = spSim$TrackID, pch = 20, cex = 0.5)
+}
+
+```
+
+We adapt data to indEffectTest same as before
+
+```{r ISF test2 process,  results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', echo = TRUE}
+list.df <- lapply(seq_along(simulated_tracks),
+                  function(i){simulated_tracks[i][[1]]})
+
+# apply rbind to the list
+simulated_dataset <- do.call("rbind",
+                             list.df)
+
+# assign null projection as X/Y values don't mean anything in this case
+simulated_dataset@proj4string <- CRS(as.character(NA))
+```
+
+### Visualising the data
+
+```{r ISF test2 visualise, results = 'hide', message = FALSE, warning = FALSE, echo = TRUE}
+# first create a version of the data without BirdID to calculate trip overlaps 
+sds <- as.data.frame(simulated_dataset)
+
+# convert it in order to be able to plot it 
+sdf <- sds %>% 
+  st_as_sf(coords = c("coords.x1", "coords.x2")) %>% 
+  tidyr::separate(TrackID, into = c("BirdID", "TrackID"), sep = "_") %>% 
+  mutate(BirdID = factor(BirdID, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10")))
+
+col2 <- ggplot() + 
+  geom_sf(data = sdf, aes(col = BirdID), alpha = 0.3, size = 0.7) + 
+  xlab("Longitude") + ylab("Latitude") +
+  # scale_shape_manual(values = 1:10) +
+  theme_bw() + 
+  theme(legend.position = "right", legend.box = "horizontal") + 
+  guides(col = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+  ggtitle("Simulated positions of 10 colonial animals") + 
+  NULL
+print(col2)
+```
+
+### Testing the function
+
+#### Calculate akde for all tracks and pairwise overlaps
+
+```{r ISF test2 fun1, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', echo = TRUE, eval = FALSE}
+# To calculate the overlap we:
+# 1 - Turn simulated tracks into "telemetry" objects"
+# 2 - fit a guesstimate movement model to each track
+# 3 - using the parameters of the guesstimate, fit a series of competing movement models
+# 4 - Calculate the debiased BA between top-selected models for each track
+# (uncertainty from the model fits is propagated into the overlap estimate under the
+#     approximation that the BA is a chi-square random variable)
+
+# 1
+sds %>% 
+  dplyr::group_by(TrackID) %>%
+  dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'),
+                                length.out = 100)) %>% 
+  mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+  dplyr::select(individual.local.identifier = TrackID, 
+                Longitude = coords.x1, Latitude = coords.x2, 
+                datetime = Date_Time) %>% 
+  ungroup() -> sds
+sds <- as.data.frame(sds)
+
+message_filename = 'script_messages.txt'
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+
+sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+
+
+# FIT.list <- list()
+cl <- makeCluster(10, type="PSOCK") ## specify number of cores, and type of cluster (PSOCK or FORK)
+registerDoParallel(cl) ## register the backend into a virtual node
+
+before <- Sys.time()
+
+## Execute parallel operation
+FIT.list <- foreach(i = 1:length(sd_tel), .packages=c("dplyr", "ctmm", "ggplot2", "lubridate")) %dopar% {
+  #  print(i)
+  one <- sd_tel[[i]]
+  # 2
+  GUESS <- ctmm.guess(one, interactive=F)
+  # 3
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
+  print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+  x <- FITS[[1]]
+}
+sink()
+Sys.time() - before
+
+# 4
+ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+save(FIT.list, ov, file = "testing_function2.RDS")
+```
+
+
+#### Obtain median, lower and upper bounds of CI of the overlap and name the matrices with the "BirdID"
+
+The array `ov` contains three "layers", with the median of the overlap distribution in the middle one, and the upper and lower bounds of the CI selected in de function in the first and last. We extract the three matrices from there
+
+```{r ISF test2 fun2, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', echo = TRUE}
+load("testing_function2.RDS")
+# separate the layers of the median and CI
+X05 <- ov[,,2]
+Xlo <- ov[,,1]
+Xhi <- ov[,,3]
+
+# remove lower triangle of each (repeated values since it's a symetric matrix)
+X05[lower.tri(X05, diag = T)] <- NA
+Xlo[lower.tri(Xlo, diag = T)] <- NA
+Xhi[lower.tri(Xhi, diag = T)] <- NA
+
+# assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+rownames(X05) <- colnames(X05) <- gid
+rownames(Xlo) <- colnames(Xlo) <- gid
+rownames(Xhi) <- colnames(Xhi) <- gid
+```
+
+
+#### Separate within (WI) and between (BW) group overlaps
+
+The function works by testing how many of the Between Individual overlap CIs contain the median of all the within individual overlaps. It provides three values, the proportion of between individual overlap CIs that contain the median of the WI overlaps, the proportion of BW overlap CIs in which the median of the WI overlaps falls outside of the BW and is higher (above) and the proportion in which is lower (below).
+
+```{r ISF test2 fun3, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', echo = TRUE}
+# mediana
+WI05 <- NULL
+BW05 <- NULL
+
+# BW lower and higher CI bounds
+BWlo <- NULL
+BWhi <- NULL
+
+for (i in seq_along(rownames(X05))) {
+  # i = 2
+  # medians
+  x1 <- X05[i,] 
+  x2 <- x1[which(names(x1) == rownames(X05)[i])]
+  x3 <- x1[which(names(x1) != rownames(X05)[i])]
+  
+  WI05 <- c(WI05, x2)
+  BW05 <- c(BW05, x3)
+  
+  # BW intervals
+  y1 <- Xlo[i,] 
+  y2 <- y1[which(names(y1) != rownames(Xlo)[i])]
+  BWlo <- c(BWlo, y2)
+  
+  z1 <- Xhi[i,] 
+  z2 <- z1[which(names(z1) != rownames(Xhi)[i])]
+  BWhi <- c(BWhi, z2)
+  
+}
+
+# remove NAs
+WI05 <- WI05[!is.na(WI05)]
+BW05 <- BW05[!is.na(BW05)]
+BWlo <- BWlo[!is.na(BWlo)]
+BWhi <- BWhi[!is.na(BWhi)]
+
+# organize values in a dataframe for plotting
+Overlaps <- data.frame(
+  Overlap = c(WI05, BW05),
+  Type = c(rep("Within", length(WI05)), rep("Between", length(BW05)))
+)
+```
+
+
+### Visualising results
+
+First of all we visualise the different densities of the WI and BW medians (without taking into account CI of individual overlaps)
+
+```{r ISF test2 fun4,  message = FALSE, warning = FALSE, echo = TRUE}
+(plot <- ggplot(data = Overlaps) + 
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
+  ggtitle("Density of within individual vs. between individual median overlaps") +
+  theme_bw())
+```
+
+
+### Calculating the WBR (Within-Between ratio)
+
+Now we calculate the median of the WI overlaps, to use as reference values (see if it is contained, above or below the BW CIs)
+
+```{r ISF test2 fun5,  message = FALSE, warning = FALSE, echo = TRUE}
+WI_median <- quantile(WI05, 0.5)
+
+BWint <- data.frame(Low = BWlo,
+                    High = BWhi)
+```
+
+Finally we produce a one row dataset containing the proportion of Between individual overlaps in which the Within Individual median is below, inside or above the CI.
+
+```{r ISF test2 fun6,  message = FALSE, warning = FALSE, echo = TRUE}
+BWint <- BWint %>% 
+    mutate(Contains = "NA") %>% 
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+  
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+proportions_wide <- spread(proportions, WI_Median_Position, Percentage)
+
+proportions_wide %>% 
+  kable(digits = 2, align = "rrrr") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+The Within-Between Ratio (WBR) is the percenatge of the cases in which the median of the Within Individual overlaps falls above the 95% CI of the between individual overlap distribution. A high WBR indicates that, when run on an artificial dataset, purposely simulating a high degree of individual site fidelity, our function is able to detect individual site fidelity in the simulated dataset.
+
+
+# Power Test
+
+In this section, I will run the `indEffect_test()` function over a sequence of datasets with increasing levels of individual site fidelity for data of both colonial and non-colonial simulated "species". To simulate the different degrees of ISF we change the resistance of the layer outside the "allowed" polygon.
+
+## For animals with different origins
+
+### Generating the data
+
+For more detail on this procedure, see the *Demo_simulating_ISF_tracks* in this repository
+
+```{r PowerTest generate, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE, eval = F}
+set.seed(2020)
+CRW <- species(state.CRW(0.2))
+test <- simulate(CRW, coords = c(0, 0), time = 100)
+
+# create empty base raster for resistance surfaces
+baseRaster <- raster(xmn = -50, xmx = 50, ymn = -50, ymx = 50, res = 0.1)
+values(baseRaster) <- 1
+baseGrid <- as(baseRaster, "SpatialPixels")
+
+# create an set of random origin points
+origin_points <- data.frame(x = runif(10, -25, 25), 
+                            y = runif(10, -25, 25))
+
+# simulate 10 trips for each origin (i.e. 10 trips per individual)
+template_tracks <- list()
+template_UDs <- list()
+resistance_surfaces <- list()
+simulated_tracks <- list()
+
+plot(1, xlim = c(-50, 50), ylim = c(-50, 50), type = "n", 
+     main = "All the 'template' tracks")
+
+# 
+resistances <- c(1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0)
+
+for (j in seq_along(resistances)) {
+  # j = 5 
+  res <- resistances[j]
+  
+  for (i in 1:10) {
+    # i = 1
+    
+    # First we need to create a template trip to get the UD for the resistance surface
+    template <- simulate(CRW, coords = c(origin_points[i,1], origin_points[i, 2]), 
+                       time = 100)
+    template_tracks[i] <- list(template)
+    lines(template, col = brewer.pal(10,"Set3")[i])
+    points(template, col = brewer.pal(10,"Set3")[i], pch = 16)
+    spTemplate <- SpatialPoints(coords = template[,1:2], proj4string = baseGrid@proj4string)
+    KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid) 
+    UD50 <- getverticeshr(KDE, percent = 50)
+    template_UDs[i] <- list(UD50) 
+    # plot(KDE)
+    # plot(UD50, add = T)
+    # plot(spTemplate, pch = 20, cex = 0.5, add = T)
+    
+    # Second, we create the resistance surface
+    res_surface <- resistanceFromShape(UD50, baseRaster = baseRaster, field = 0, 
+                                       binary = F, background = 1)
+    res_surface[res_surface == 1] <- res
+    # plot(res_surface)
+    resistance_surfaces[i] <- list(res_surface)
+    # plot(res_surface)
+    
+    # Third, we simulate 10 tracks from each surface (i.e. from each individual)
+    sim_tracks <- simulate(list(CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW), 
+                           start.resistance	= 0,
+                           time = 100, resist = res_surface)
+    spSim <- SpatialPointsDataFrame(coords = cbind(c(sim_tracks[,1], sim_tracks[,4],
+                                                     sim_tracks[,7], sim_tracks[,10],
+                                                     sim_tracks[,13], sim_tracks[,16],
+                                                     sim_tracks[,19], sim_tracks[,22],
+                                                     sim_tracks[,25],sim_tracks[,28]),
+                                                   c(sim_tracks[,2], sim_tracks[,5],
+                                                     sim_tracks[,8], sim_tracks[,11],
+                                                     sim_tracks[,14],sim_tracks[,17],
+                                                     sim_tracks[,20], sim_tracks[,23],
+                                                     sim_tracks[,26], sim_tracks[,29])), 
+                                    data = data.frame(TrackID = paste(i, rep(1:10, 
+                                                                             each = 100),
+                                                                      sep = "_"), 
+                                                      BirdID = rep(i, 1000)))
+    spSim@proj4string <- baseGrid@proj4string
+    simulated_tracks[i] <- list(spSim)
+    spSim$BirdID <- NULL
+    # KUD_sim <- kernelUD(spSim, grid = baseGrid)
+    # print(mean(kerneloverlap(spSim, method = "BA", percent = 50, conditional = T)))
+    # plot(spSim, add = T, col = factor(spSim$TrackID), pch = ".", cex = 0.1)
+  }
+  
+  list.df <- lapply(seq_along(simulated_tracks),
+                    function(i){simulated_tracks[i][[1]]})
+  
+  # apply rbind to the list
+  simulated_dataset <- do.call("rbind",
+                               list.df)
+  
+  # assign null projection as X/Y values don't mean anything in this case
+  simulated_dataset@proj4string <- CRS(as.character(NA))
+  save(simulated_dataset, file = paste0("simulated_dataset_noncolonial_res", res, ".RDS"))
+}
+```
+
+### Testing the function
+
+Plot first all the datasets used for the powertest
+
+```{r PowerTest plots, message = FALSE, warning = FALSE, fig.width = 15, fig.height = 15}
+# plot the different datasets to compare ISF visually
+rdslist <- list.files(pattern = ".RDS")
+
+rdslist <- rdslist[grepl('simulated_dataset_noncolonial', rdslist)]
+plotlist <- list()
+# for (j in c(10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11)) {
+for(j in seq_along(rdslist)){  
+  # j = 10
+  
+  load(rdslist[j])
+  sds <- as.data.frame(simulated_dataset)
+
+  sds %>% 
+    dplyr::group_by(TrackID) %>%
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
+                                  length.out = 100)) %>% 
+    mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+    dplyr::select(individual.local.identifier = TrackID, 
+                  Longitude = coords.x1, Latitude = coords.x2, 
+                  datetime = Date_Time) %>% 
+    ungroup() -> sds
+  sds <- as.data.frame(sds)
+  
+  sdf <- sds %>% 
+    separate(individual.local.identifier, c("Ind", "Trip")) %>% 
+    st_as_sf(coords = c("Longitude", "Latitude")) %>% 
+    mutate(Ind = factor(as.character(Ind), levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))) %>% 
+    mutate(Trip = factor(as.character(Trip), levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
+  plot_title <- paste0("Outside resistance ", 
+                       gsub("res", "", 
+                            strsplit(tools::file_path_sans_ext(rdslist[j]), "_")[[1]][[4]]))
+  
+  plt <- ggplot() + 
+    geom_sf(data = sdf, aes(col = Ind), alpha = 0.3, size = 0.7) + 
+    xlab("") + ylab("") +
+    theme_bw() + 
+    theme_bw() + 
+    theme(legend.position = "right", legend.box = "horizontal") + 
+    guides(col = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    coord_sf(xlim = c(-50, 50),
+             ylim = c(-50, 50), expand = T) +
+    # scale_shape(guide = "none") +
+    ggtitle(plot_title)
+    NULL
+  plotlist[j] <- list(plt)
+  names(plotlist)[j] <- plot_title
+  # print(plt)
+  rm(simulated_dataset)
+}
+
+plotlist <- plotlist[
+  c("Outside resistance 0", "Outside resistance 0.1", "Outside resistance 0.2", 
+           "Outside resistance 0.3", "Outside resistance 0.4", "Outside resistance 0.5",
+           "Outside resistance 0.6", "Outside resistance 0.7", "Outside resistance 0.8",
+           "Outside resistance 0.9", "Outside resistance 1")]
+ggpubr::ggarrange(plotlist = plotlist, common.legend = T)
+
+```
+
+We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking.
+
+```{r PowerTest fun1, message = FALSE, warning = FALSE, eval = FALSE}
+# To calculate the overlap we:
+# 1 - Turn simulated tracks into "telemetry" objects"
+# 2 - fit a guesstimate movement model to each track
+# 3 - using the parameters of the guesstimate, fit a series of competing movement models
+# 4 - Calculate the debiased BA between top-selected models for each track
+# (uncertainty from the model fits is propagated into the overlap estimate under the
+#     approximation that the BA is a chi-square random variable)
+
+cl <- makeCluster(10, type="PSOCK") ## specify number of cores, and type of cluster (PSOCK or FORK)
+registerDoParallel(cl) ## register the backend into a virtual node
+
+# results_list <- list()
+## Execute parallel operation
+results_list <- foreach(j = 1:11, .packages=c("dplyr", "ctmm", "ggplot2", "lubridate")) %dopar% {
+          # for (j in seq_along(rdslist)) {
+          Result <- list()
+          # j = 1
+          load(rdslist[j])
+  sds <- as.data.frame(simulated_dataset)
+
+  sds %>% 
+    dplyr::group_by(TrackID) %>%
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
+                                  length.out = 100)) %>% 
+    mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+    dplyr::select(individual.local.identifier = TrackID, 
+                  Longitude = coords.x1, Latitude = coords.x2, 
+                  datetime = Date_Time) %>% 
+    ungroup() -> sds
+  
+  sds <- as.data.frame(sds)
+  # 1
+  sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+  
+  
+  FIT.list <- list()
+  
+  before <- Sys.time()
+  
+  for(i in 1:length(sd_tel)){
+  # for(i in 1:10){
+    print(i)
+    one <- sd_tel[[i]]
+    # 2
+    GUESS <- ctmm.guess(one, interactive=F)
+    # 3
+    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
+    print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+    FIT.list[[i]] <- FITS[[1]]
+  }
+  Sys.time() - before
+  
+  # 4
+  ov <- ctmm::overlap(FIT.list, level = 0.95)
+  
+  # we select the "middle layer" of the array which contains the point estimate 
+  # (for now ignoring the CI)
+  X05 <- ov[,,2]
+  Xlo <- ov[,,1]
+  Xhi <- ov[,,3]
+  
+  X05[lower.tri(X05, diag = T)] <- NA
+  Xlo[lower.tri(Xlo, diag = T)] <- NA
+  Xhi[lower.tri(Xhi, diag = T)] <- NA
+  
+  Result[1] <- list(list(X05, Xlo, Xhi))
+  # assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+  gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+  rownames(X05) <- colnames(X05) <- gid
+  rownames(Xlo) <- colnames(Xlo) <- gid
+  rownames(Xhi) <- colnames(Xhi) <- gid
+  
+  # separate within (WI) and between (BW) group overlaps
+  
+  # median
+  WI05 <- NULL
+  BW05 <- NULL
+  
+  # lower
+  WIlo <- NULL
+  BWlo <- NULL
+  
+  # higher
+  WIhi <- NULL
+  BWhi <- NULL
+  
+  for (i in seq_along(rownames(X05))) {
+    # i = 1
+    
+    # medians
+    x1 <- X05[i,] 
+    x2 <- x1[which(names(x1) == rownames(X05)[i])]
+    x3 <- x1[which(names(x1) != rownames(X05)[i])]
+    WI05 <- c(WI05, x2)
+    BW05 <- c(BW05, x3)
+    
+    # BW intervals
+    x1 <- Xlo[i,] 
+    x3 <- x1[which(names(x1) != rownames(Xlo)[i])]
+    BWlo <- c(BWlo, x3)
+    
+    x1 <- Xhi[i,] 
+    x3 <- x1[which(names(x1) != rownames(Xhi)[i])]
+    BWhi <- c(BWhi, x3)
+    
+  }
+  
+  # medians
+  BW05 <- BW05[!is.na(BW05)]
+  WI05 <- WI05[!is.na(WI05)]
+  
+  # BW intervals
+  BWlo <- BWlo[!is.na(BWlo)]
+  BWhi <- BWhi[!is.na(BWhi)]
+  
+  # organize values in a dataframe for plotting
+  Overlaps <- data.frame(
+    Overlap = c(WI05, BW05),
+    Type = c(rep("Within", length(WI05)), rep("Between", length(BW05))),
+    Test = rdslist[j]
+    )
+  Result[2] <- list(Overlaps)
+  # plot boxplot
+  
+  plot1 <- ggplot(data = Overlaps) + 
+    geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
+    ggtitle("Density of within individual vs. between individual median overlaps") +
+    theme_bw()
+  
+  Result[3] <- list(plot1)
+  
+  
+  WI_median <- quantile(WI05, 0.5)
+  
+  BWint <- data.frame(Low = BWlo,
+                      High = BWhi)
+  
+  BWint <- BWint %>% 
+    mutate(Contains = "NA") %>% 
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above"))
+  
+  proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+  
+  names(proportions) <- c("WI_Median_Position", "Percentage")
+  proportions$Percentage <- round(proportions$Percentage*100, 1)
+  
+  Result[4] <- list(proportions)
+  
+  # results_list[j] <- list(Result)
+  
+  save(FIT.list, ov, Result, 
+       file = paste("noncolonial_powerTest", strsplit(rdslist[j], "_")[[1]][4], sep = "_"))
+}
+stopCluster(cl)
+
+```
+
+### Explore sensitivity tests outputs
+
+```{r ISF test2 output}
+powertestfiles <- list.files(pattern = "noncolonial_powerTest")
+
+res_list <- list()
+plot_list <- list()
+for(i in c(10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11)) {
+  # i = 10
+  load(powertestfiles[i])
+  Test = str_sub(powertestfiles[i], end = -5)
+  res <- Result[[4]]
+  res2 <- cbind(Test, res)
+  res_list[i] <- list(res2)
+  plot_list[i] <- list(Result[[3]])
+  names(plot_list)[i] <- Test
+}
+
+test_results <- bind_rows(res_list)
+
+test_results %>% 
+  pivot_wider(names_from = "WI_Median_Position", values_from = "Percentage") %>% 
+  separate(Test, into = c("Type of test", "test", "Resistance"), sep = "_", remove = T) %>% 
+  mutate(Resistance = as.numeric(gsub("res", "", Resistance))) %>% 
+  arrange(Resistance) %>% 
+  dplyr::select("Resistance", "Above (WBR)" = "Above", "NotAbove") %>% 
+  kable(digits = 2, align = "rrrr", caption = "Power Test - noncolonial") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+## For animals with the same origin
+
+### Generating the data
+
+For more detail on this procedure, see the *Demo_simulating_ISF_tracks* in this repository
+
+```{r PowerTest2 generate, results = 'hide', message = FALSE, warning = FALSE, fig.show = 'hide', cache = TRUE, eval = FALSE}
+set.seed(205)
+CRW <- species(state.CRW(0.1))
+test <- simulate(CRW, coords = c(0, 0), time = 100)
+
+# create empty base raster for resistance surfaces
+baseRaster <- raster(xmn = -70, xmx = 70, ymn = -70, ymx = 70, res = 0.1)
+values(baseRaster) <- 1
+baseGrid <- as(baseRaster, "SpatialPixels")
+
+# create a vector of random angles
+angles <- runif(10, 0, 360)
+
+# simulate 10 trips for each origin (i.e. 10 trips per individual)
+template_tracks <- list()
+template_UDs <- list()
+resistance_surfaces <- list()
+simulated_tracks <- list()
+
+plot(1, xlim = c(-70, 70), ylim = c(-70, 70), type = "n", 
+     main = "All the 'template' tracks")
+
+resistances <- c(1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0)
+
+for (j in seq_along(resistances)) {
+  # j = 11
+  res <- resistances[j]
+  
+  for (i in 1:10) {
+    # i = 1
+    
+    # First we need to create a template trip to get the UD for the resistance surface
+    template <- simulate(CRW, coords = c(0, 0), angles = angles[i], time = 1000)
+    template <- as.data.frame(template)
+    template <- template %>% 
+      filter(V1 > -60 & V1 < 60) %>% 
+      filter(V2 > -60 & V2 < 60)
+    
+    template_tracks[i] <- list(template)
+    lines(template, col = brewer.pal(10,"Set3")[i])
+    points(template, col = brewer.pal(10,"Set3")[i], pch = 16)
+    spTemplate <- SpatialPoints(coords = template[,1:2], proj4string = baseGrid@proj4string)
+    
+    print(i)
+    KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid, extent = 2) 
+    UD50 <- getverticeshr(KDE, percent = 50)
+    template_UDs[i] <- list(UD50) 
+    
+    # Second, we create the resistance surface
+    res_surface <- resistanceFromShape(UD50, baseRaster = baseRaster, field = 0, 
+                                       binary = F, background = 1)
+    res_surface[res_surface == 1] <- res
+    resistance_surfaces[i] <- list(res_surface)
+    
+    # Third, we simulate 10 tracks from each surface (i.e. from each individual)
+    sim_tracks <- simulate(list(CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW, CRW), 
+                           start.resistance	= 0,
+                           time = 100, resist = res_surface)
+    spSim <- SpatialPointsDataFrame(coords = cbind(c(sim_tracks[,1], sim_tracks[,4],
+                                                     sim_tracks[,7], sim_tracks[,10],
+                                                     sim_tracks[,13], sim_tracks[,16],
+                                                     sim_tracks[,19], sim_tracks[,22],
+                                                     sim_tracks[,25],sim_tracks[,28]),
+                                                   c(sim_tracks[,2], sim_tracks[,5],
+                                                     sim_tracks[,8], sim_tracks[,11],
+                                                     sim_tracks[,14],sim_tracks[,17],
+                                                     sim_tracks[,20], sim_tracks[,23],
+                                                     sim_tracks[,26], sim_tracks[,29])), 
+                                    data = data.frame(TrackID = paste(i, rep(1:10, 
+                                                                             each = 100),
+                                                                      sep = "_"), 
+                                                      BirdID = rep(i, 1000)))
+    spSim@proj4string <- baseGrid@proj4string
+    simulated_tracks[i] <- list(spSim)
+    spSim$BirdID <- NULL
+  }
+  
+  list.df <- lapply(seq_along(simulated_tracks),
+                    function(i){simulated_tracks[i][[1]]})
+  
+  # apply rbind to the list
+  simulated_dataset <- do.call("rbind",
+                               list.df)
+  
+  # assign null projection as X/Y values don't mean anything in this case
+  simulated_dataset@proj4string <- CRS(as.character(NA))
+  save(simulated_dataset, file = paste0("simulated_dataset_colonial_res", res, ".RDS"))
+}
+```
+
+### Testing the function
+
+Plot first all the datasets used for the powertest
+
+```{r PowerTest plots2, message = FALSE, warning = FALSE, fig.width = 15, fig.height = 15}
+# plot the different datasets to compare ISF visually
+rdslist <- list.files(pattern = ".RDS")
+
+rdslist <- rdslist[grepl('simulated_dataset_colonial', rdslist)]
+
+plotlist <- list()
+for (j in seq_along(rdslist)) {
+  # j = 1
+  
+  load(rdslist[j])
+  sds <- as.data.frame(simulated_dataset)
+
+  sds %>% 
+    dplyr::group_by(TrackID) %>%
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
+                                  length.out = 100)) %>% 
+    mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+    dplyr::select(individual.local.identifier = TrackID, 
+                  Longitude = coords.x1, Latitude = coords.x2, 
+                  datetime = Date_Time) %>% 
+    ungroup() -> sds
+  sds <- as.data.frame(sds)
+  
+  sdf <- sds %>% 
+    separate(individual.local.identifier, c("Ind", "Trip")) %>% 
+    st_as_sf(coords = c("Longitude", "Latitude")) %>% 
+    mutate(Ind = factor(as.character(Ind), levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))) %>% 
+    mutate(Trip = factor(as.character(Trip), levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
+  
+  plot_title <- paste0("Outside resistance ", 
+                       gsub("res", "", 
+                            strsplit(tools::file_path_sans_ext(rdslist[j]), "_")[[1]][[4]]))
+  
+  plt <- ggplot() + 
+    geom_sf(data = sdf, aes(col = Ind), alpha = 0.3, size = 0.7) + 
+    xlab("") + ylab("") +
+    theme_bw() + 
+    theme_bw() + 
+    theme(legend.position = "right", legend.box = "horizontal") + 
+    guides(col = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    coord_sf(xlim = c(-50, 50),
+             ylim = c(-50, 50), expand = T) +
+    # scale_shape(guide = "none") +
+    ggtitle(plot_title)
+    NULL
+  plotlist[j] <- list(plt)
+  names(plotlist)[j] <- plot_title
+  # print(plt)
+  rm(simulated_dataset)
+}
+
+plotlist <- plotlist[
+  c("Outside resistance 0", "Outside resistance 0.1", "Outside resistance 0.2", 
+           "Outside resistance 0.3", "Outside resistance 0.4", "Outside resistance 0.5",
+           "Outside resistance 0.6", "Outside resistance 0.7", "Outside resistance 0.8",
+           "Outside resistance 0.9", "Outside resistance 1")]
+ggpubr::ggarrange(plotlist = plotlist, common.legend = T)
+
+```
+
+We now run a simplified version of the function `IndEffectTest` without all the code re the spatial projection, crossing datelines, etc. and as plain code outside the function for easy tweaking.
+
+```{r PowerTest2 fun1, message = FALSE, warning = FALSE, eval = FALSE}
+# To calculate the overlap we:
+# 1 - Turn simulated tracks into "telemetry" objects"
+# 2 - fit a guesstimate movement model to each track
+# 3 - using the parameters of the guesstimate, fit a series of competing movement models
+# 4 - Calculate the debiased BA between top-selected models for each track
+# (uncertainty from the model fits is propagated into the overlap estimate under the
+#     approximation that the BA is a chi-square random variable)
+rdslist <- list.files(pattern = ".RDS")
+
+rdslist <- rdslist[grepl('simulated_dataset_colonial', rdslist)]
+
+cl <- makeCluster(10, type="PSOCK") ## specify number of cores, and type of cluster (PSOCK or FORK)
+registerDoParallel(cl) ## register the backend into a virtual node
+
+# results_list <- list()
+## Execute parallel operation
+results_list <- foreach(j = 1:11, .packages=c("dplyr", "ctmm", "ggplot2", "lubridate")) %dopar% {
+  Result <- list()
+  # j = 1
+  
+  load(rdslist[j])
+  sds <- as.data.frame(simulated_dataset)
+
+  sds %>% 
+    dplyr::group_by(TrackID) %>%
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
+                                  length.out = 100)) %>% 
+    mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+    dplyr::select(individual.local.identifier = TrackID, 
+                  Longitude = coords.x1, Latitude = coords.x2, 
+                  datetime = Date_Time) %>% 
+    ungroup() -> sds
+  
+  sds <- as.data.frame(sds)
+  # 1
+  sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+  
+  
+  FIT.list <- list()
+  
+  before <- Sys.time()
+  
+  for(i in 1:length(sd_tel)){
+    print(i)
+    one <- sd_tel[[i]]
+    # 2
+    GUESS <- ctmm.guess(one, interactive=F)
+    # 3
+    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
+    print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+    FIT.list[[i]] <- FITS[[1]]
+  }
+  Sys.time() - before
+  
+  # 4
+  ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+  # we select the "middle layer" of the array which contains the point estimate 
+  # (for now ignoring the CI)
+  X05 <- ov[,,2]
+  Xlo <- ov[,,1]
+  Xhi <- ov[,,3]
+  
+  X05[lower.tri(X05, diag = T)] <- NA
+  Xlo[lower.tri(Xlo, diag = T)] <- NA
+  Xhi[lower.tri(Xhi, diag = T)] <- NA
+  
+  Result[1] <- list(list(X05, Xlo, Xhi))
+  # assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+  gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+  rownames(X05) <- colnames(X05) <- gid
+  rownames(Xlo) <- colnames(Xlo) <- gid
+  rownames(Xhi) <- colnames(Xhi) <- gid
+  
+  # separate within (WI) and between (BW) group overlaps
+  
+  # median
+  WI05 <- NULL
+  BW05 <- NULL
+  
+  # lower
+  WIlo <- NULL
+  BWlo <- NULL
+  
+  # higher
+  WIhi <- NULL
+  BWhi <- NULL
+  
+  for (i in seq_along(rownames(X05))) {
+    # i = 1
+    
+    # medians
+    x1 <- X05[i,] 
+    x2 <- x1[which(names(x1) == rownames(X05)[i])]
+    x3 <- x1[which(names(x1) != rownames(X05)[i])]
+    WI05 <- c(WI05, x2)
+    BW05 <- c(BW05, x3)
+    
+    # BW intervals
+    x1 <- Xlo[i,] 
+    x3 <- x1[which(names(x1) != rownames(Xlo)[i])]
+    BWlo <- c(BWlo, x3)
+    
+    x1 <- Xhi[i,] 
+    x3 <- x1[which(names(x1) != rownames(Xhi)[i])]
+    BWhi <- c(BWhi, x3)
+    
+  }
+  
+  # medians
+  BW05 <- BW05[!is.na(BW05)]
+  WI05 <- WI05[!is.na(WI05)]
+  
+  # BW intervals
+  BWlo <- BWlo[!is.na(BWlo)]
+  BWhi <- BWhi[!is.na(BWhi)]
+  
+  # organize values in a dataframe for plotting
+  Overlaps <- data.frame(
+    Overlap = c(WI05, BW05),
+    Type = c(rep("Within", length(WI05)), rep("Between", length(BW05))),
+    Test = rdslist[j]
+    )
+  Result[2] <- list(Overlaps)
+
+  plot1 <- ggplot(data = Overlaps) + 
+    geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
+    ggtitle("Density of within individual vs. between individual median overlaps") +
+    theme_bw()
+  
+  Result[3] <- list(plot1)
+  
+  
+  WI_median <- quantile(WI05, 0.5)
+  
+  BWint <- data.frame(Low = BWlo,
+                      High = BWhi)
+  
+  BWint <- BWint %>% 
+    mutate(Contains = "NA") %>% 
+    mutate(Contains = if_else(High > WI_median, "Above", "NotAbove"))
+  
+  proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+  
+  names(proportions) <- c("WI_Median_Position", "Percentage")
+  proportions$Percentage <- round(proportions$Percentage*100, 1)
+  
+  Result[4] <- list(proportions)
+  
+  results_list[j] <- list(Result)
+  
+  save(FIT.list, ov, Result, 
+       file = paste("colonial_powerTest", strsplit(rdslist[j], "_")[[1]][4], sep = "_"))
+}
+stopCluster(cl)
+```
+
+### Explore sensitivity tests outputs
+
+```{r PowerTest2 results}
+powertestfiles <- list.files(pattern = "^colonial_powerTest")
+
+res_list <- list()
+plot_list <- list()
+for(i in seq_along(powertestfiles)) {
+  # i = 1
+  load(powertestfiles[i])
+  Test = str_sub(powertestfiles[i], end = -5)
+  res <- Result[[4]]
+  res2 <- cbind(Test, res)
+ res_list[i] <- list(res2)
+ plot_list[i] <- list(Result[[3]])
+ names(plot_list)[i] <- Test
+}
+
+test_results <- bind_rows(res_list)
+
+test_results %>% 
+  pivot_wider(names_from = "WI_Median_Position", values_from = "Percentage") %>% 
+  separate(Test, into = c("Type of test", "test", "Resistance"), sep = "_", remove = T) %>% 
+  mutate(Resistance = as.numeric(gsub("res", "", Resistance))) %>% 
+  arrange(Resistance) %>% 
+  dplyr::select("Resistance", "Above (WBR)" = "Above", "NotAbove") %>% 
+  kable(digits = 2, align = "rrrr", caption = "Power Test - colonial") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+  
+```
+
+
+# Sampling effort test
+
+In this section we'll test the ability of the `indEffect_test()` function to detect ISF when different individuals have different ammounts of data. For that, we generate 9 different datasets of a hundred tracks of a hundred positions each (10000 rows in total) with different individual sampling imbalances:
+
+-   91:1:1:1:1:1:1:1:1:1
+
+-   46:46:1:1:1:1:1:1:1:1
+
+-   31:31:31:1:1:1:1:1:1:1
+
+-   23:23:23:23:1:1:1:1:1:1
+
+-   19:19:19:19:19:1:1:1:1:1
+
+-   16:16:16:16:16:16:1:1:1:1
+
+-   13:13:13:13:13:13:13:1:1:1
+
+-   12:12:12:12:12:12:12:12:1:1
+
+-   11:11:11:11:11:11:11:11:11:1
+
+-   10:10:10:10:10:10:10:10:10:10
+
+## Generate the templates
+
+```{r samplingEffort gen, message = FALSE, warning = FALSE}
+CRW <- species(state.CRW(0.4))
+set.seed(1234)
+test <- simulate(CRW, coords = c(0, 0), time = 100)
+
+# create empty base raster for resistance surfaces
+baseRaster <- raster(xmn = -50, xmx = 50, ymn = -50, ymx = 50, res = 0.1)
+values(baseRaster) <- 1
+baseGrid <- as(baseRaster, "SpatialPixels")
+
+# create an vector of random angles
+origin_points <- data.frame(x = runif(10, -25, 25), 
+                            y = runif(10, -25, 25))
+
+# simulate 10 trips for each origin (i.e. 10 trips per individual)
+template_tracks <- list()
+template_UDs <- list()
+
+
+for (i in 1:10) {
+  # i = 1
+  
+  # First we need to create a template trip to get the UD for the resistance surface
+  set.seed(12)
+  template <- simulate(CRW, 
+                       coords = c(origin_points[i,1], origin_points[i, 2]), 
+                       time = 100)
+  template_tracks[i] <- list(template)
+  spTemplate <- SpatialPoints(coords = template[,1:2], proj4string = baseGrid@proj4string)
+  KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid) 
+  UD50 <- getverticeshr(KDE, percent = 50)
+  template_UDs[i] <- list(UD50) 
+}
+```
+
+## Generate the data and run the function
+
+We generate the simulated datasets and run the IndEffectTest functin steps inside a loop for all the specified unbalanced datasets. We will simulate a high ISF, with a resistance value of 1 outside the "allowed" area.
+
+```{r samplingEffort run, cache = TRUE, message = FALSE, warning = FALSE, eval = FALSE}
+repeated_birds <- c(1:9) 
+
+plotlist <- list()
+
+cl <- makeCluster(10, type="PSOCK") ## specify number of cores, and type of cluster (PSOCK or FORK)
+registerDoParallel(cl) ## register the backend into a virtual node
+# results_list <- list()
+## Execute parallel operation
+
+foreach(j = 1:9, .packages=c("dplyr", "ctmm", "ggplot2", "lubridate", "SiMRiv", "tidyr", "sp")) %dopar% {
+  # j = 1
+  cat(j, "repeated bird(s) \n")
+  set.seed(j)
+  x <- sample(1:10, j, replace = FALSE)
+  
+  xlist <- list(CRW)
+  splist <- rep(xlist, floor((100-(10-j))/j))
+  
+  simulated_tracks <- list()
+  
+  # simulate tracks for each individual 
+  for (i in x) {
+    # i = 3
+    res_surface <- resistanceFromShape(template_UDs[[i]], baseRaster = baseRaster, 
+                                       field = 0, background = 1)
+    sim_tracks <- simulate(splist, 
+                           start.resistance	= 0,
+                           time = 100, resist = res_surface)
+    
+    colnames(sim_tracks) <- paste(rep(c("x", "y", "z"), floor((100-(10-j))/j)),
+                                  rep(1:floor((100-(10-j))/j), each = 3), 
+                                  sep = "_")
+    
+    sim_tracks <- sim_tracks %>% 
+      as.data.frame() 
+    
+    
+    x_vector <- sim_tracks %>% 
+      dplyr::select(contains('x')) %>% 
+      mutate(posID = seq(1:100)) %>% 
+      pivot_longer(!posID, names_to = "track_coord", values_to = "degrees")  %>% 
+      separate(track_coord, into = c("coord", "trackID")) %>% 
+      as.data.frame() %>% 
+      dplyr::select(trackID, posID, x = degrees)
+    
+    y_vector <- sim_tracks %>% 
+      dplyr::select(contains('y')) %>% 
+      mutate(posID = seq(1:100)) %>% 
+      pivot_longer(!posID, names_to = "track_coord", values_to = "degrees")  %>% 
+      separate(track_coord, into = c("coord", "trackID")) %>% 
+      as.data.frame() %>% 
+      dplyr::select(trackID, posID, y = degrees)
+    
+    sim_tracks2 <- x_vector %>% 
+      left_join(y_vector) %>% 
+      arrange(trackID, posID)
+    
+    spSim <- SpatialPointsDataFrame(coords = sim_tracks2[,3:4], 
+                                    data = data.frame(TrackID = paste(rep(i,
+                                                                          nrow(sim_tracks2)), 
+                                                                      sim_tracks2$trackID, 
+                                                                      sep = "_"),
+                                                      BirdID = rep(i, nrow(sim_tracks2))))
+    spSim@proj4string <- baseGrid@proj4string
+    simulated_tracks[i] <- list(spSim)
+    spSim$BirdID <- NULL
+   }  
+  
+  y <- 1:10
+  
+  for (i in y[-x]) {
+    res_surface <- resistanceFromShape(template_UDs[[i]], baseRaster = baseRaster, 
+                                       field = 0, background = 0.5)
+    sim_tracks <- simulate(xlist, 
+                           
+                           start.resistance	= 0,
+                           time = 100, resist = res_surface)
+    xcoords <- as.vector(sim_tracks[,1])
+    ycoords <- as.vector(sim_tracks[,2])
+    spSim <- SpatialPointsDataFrame(coords = cbind(xcoords, ycoords), 
+                                    data = data.frame(TrackID = paste(i, 
+                                                                      rep(1, each = 100),
+                                                                      sep = "_"), 
+                                                      BirdID = rep(i, 100)))
+    spSim@proj4string <- baseGrid@proj4string
+    simulated_tracks[i] <- list(spSim)
+    spSim$BirdID <- NULL
+  }
+  
+  list.df <- lapply(seq_along(simulated_tracks),
+                    function(i){simulated_tracks[i][[1]]})
+  
+  # apply rbind to the list
+  simulated_dataset <- do.call("rbind",
+                               list.df)
+  
+  simulated_dataset@proj4string <- baseGrid@proj4string
+  
+  
+  sds <- data.frame(TrackID = simulated_dataset$TrackID, 
+                    BirdID = simulated_dataset$BirdID, 
+                    xcoords = simulated_dataset@coords[,1],
+                    ycoords = simulated_dataset@coords[,2])
+  
+  sds$BirdID <- NULL
+  
+  sds <- sds %>% 
+    dplyr::group_by(TrackID) %>%
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
+                                  length.out = n())) %>% 
+    mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+    dplyr::select(TrackID, 
+                  Longitude = xcoords, Latitude = ycoords, 
+                  datetime = Date_Time) %>% 
+    ungroup() %>% 
+    as.data.frame()
+  
+  message_filename = paste("j", j, 'script_messages.txt', sep = "_")
+  try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+  sink(message_file, type="message")
+  sink(message_file, type="output")
+  
+  sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+  
+  
+  FIT.list <- list()
+  
+  before <- Sys.time()
+  
+  for(i in 1:length(sd_tel)){
+    print(i)
+    one <- sd_tel[[i]]
+    # 2
+    GUESS <- ctmm.guess(one, interactive=F)
+    # 3
+    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
+    print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+    FIT.list[[i]] <- FITS[[1]]
+  }
+  
+  sink(file = NULL, type="message")
+  sink(file = NULL, type="output")
+  # closeAllConnections() 
+  Sys.time() - before
+  
+  # 4
+  ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+  # we select the "middle layer" of the array which contains the point estimate 
+  # (for now ignoring the CI)
+  X05 <- ov[,,2]
+  Xlo <- ov[,,1]
+  Xhi <- ov[,,3]
+  
+  X05[lower.tri(X05, diag = T)] <- NA
+  Xlo[lower.tri(Xlo, diag = T)] <- NA
+  Xhi[lower.tri(Xhi, diag = T)] <- NA
+  
+  Result1 <- list()
+  Result1[1] <- list(list(X05, Xlo, Xhi))
+  # assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+  gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+  rownames(X05) <- colnames(X05) <- gid
+  rownames(Xlo) <- colnames(Xlo) <- gid
+  rownames(Xhi) <- colnames(Xhi) <- gid
+  
+  # separate within (WI) and between (BW) group overlaps
+  
+  # median
+  WI05 <- NULL
+  BW05 <- NULL
+  
+  # lower
+  WIlo <- NULL
+  BWlo <- NULL
+  
+  # higher
+  WIhi <- NULL
+  BWhi <- NULL
+  
+  for (i in seq_along(rownames(X05))) {
+    # i = 1
+    
+    # medians
+    x1 <- X05[i,] 
+    x2 <- x1[which(names(x1) == rownames(X05)[i])]
+    x3 <- x1[which(names(x1) != rownames(X05)[i])]
+    WI05 <- c(WI05, x2)
+    BW05 <- c(BW05, x3)
+    
+    # BW intervals
+    x1 <- Xlo[i,] 
+    x3 <- x1[which(names(x1) != rownames(Xlo)[i])]
+    BWlo <- c(BWlo, x3)
+    
+    x1 <- Xhi[i,] 
+    x3 <- x1[which(names(x1) != rownames(Xhi)[i])]
+    BWhi <- c(BWhi, x3)
+    
+  }
+  
+  # medians
+  BW05 <- BW05[!is.na(BW05)]
+  WI05 <- WI05[!is.na(WI05)]
+  
+  # BW intervals
+  BWlo <- BWlo[!is.na(BWlo)]
+  BWhi <- BWhi[!is.na(BWhi)]
+  
+  # organize values in a dataframe for plotting
+  Overlaps <- data.frame(
+    Overlap = c(WI05, BW05),
+    Type = c(rep("Within", length(WI05)), rep("Between", length(BW05))),
+    Test = "ind_1"
+  )
+  Result1[2] <- list(Overlaps)
+  # plot boxplot
+  
+  plot1 <- ggplot(data = Overlaps) + 
+    geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
+    ggtitle(paste(j, " repeated birds")) +
+    theme_bw()
+  
+  Result1[3] <- list(plot1)
+  
+  
+  WI_median <- quantile(WI05, 0.5)
+  
+  BWint <- data.frame(Low = BWlo,
+                      High = BWhi)
+  
+  BWint <- BWint %>% 
+    mutate(Contains = "NA") %>% 
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+  
+  proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+  
+  names(proportions) <- c("WI_Median_Position", "Percentage")
+  proportions$Percentage <- round(proportions$Percentage*100, 2)
+  
+  (proportions_wide <- spread(proportions, WI_Median_Position, Percentage))
+  
+  Result1[4] <- list(proportions_wide)
+  
+  #list_of_results[j] <- list(Result1)
+  plotlist[j] <- list(plot1)
+  saveRDS(Result1, file = paste0(j, "_repeated_birds.RDS"))
+}
+```
+
+## Compare results
+
+```{r samplingEffort compare, cache = TRUE, message = FALSE, warning = FALSE, fig.height = 12, fig.width = 12}
+rdslist <- list.files(pattern = "repeated_birds.RDS")
+
+list_of_results <- list()
+for (i in seq_along(rdslist)) {
+  res <- readRDS(rdslist[i])
+  list_of_results[[i]] <- res
+}
+
+final_df <- dplyr::bind_rows(
+  list_of_results[[1]][[4]], list_of_results[[2]][[4]], list_of_results[[3]][[4]], list_of_results[[4]][[4]], 
+  list_of_results[[5]][[4]], list_of_results[[6]][[4]], list_of_results[[7]][[4]], list_of_results[[9]][[4]], 
+  list_of_results[[9]][[4]])
+
+final_df$Test <- paste(seq(1, 9), "repeated birds")
+
+final_df %>% 
+  dplyr::select("Test", "Above (WBR)", "NotAbove") %>% 
+  kable(digits = 2, align = "rrrr", caption = "Test sampling unbalance") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+Whether there's a strong unbalance (1 individual repeatedly sampled and the rest only sampled once) or data are more even (9 individuals repeatedly sampled, only one sampled only once), the function is able to detect individual site fidelity
+
+# Sampling frequency test
+
+Testing the ability of the IndEffectTest function to detect ISF at different sampling frequencies. Here, we use the dataset of the non-colonial simulated species with a 1 resistance surface (high ISF). From it, we will subset every fifth position, and then every tenth, and compare the results of the individual site fidelity test. 
+
+```{r samplingFreq setup, include = F}
+load("simulated_dataset_noncolonial_res1.RDS")
+```
+
+## Test ISF with the full simulated dataset of high ISF
+
+```{r samplingFreq test, cache = TRUE, message = FALSE, warning = FALSE, collapse = TRUE, eval = FALSE}
+sds <- as.data.frame(simulated_dataset)
+
+sds %>% 
+  dplyr::group_by(TrackID) %>%
+  dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'), 
+                                length.out = 100)) %>% 
+  mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
+  dplyr::select(individual.local.identifier = TrackID, 
+                Longitude = coords.x1, Latitude = coords.x2, 
+                datetime = Date_Time) %>% 
+  ungroup() -> sds
+sds <- as.data.frame(sds)
+
+message_filename = "output_fullds.txt"
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+
+
+FIT.list <- list()
+
+before <- Sys.time()
+for(i in 1:length(sd_tel)){
+  # print(i)
+  one <- sd_tel[[i]]
+  # 2
+  GUESS <- ctmm.guess(one, interactive=F)
+  # 3
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
+  # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+  FIT.list[[i]] <- FITS[[1]]
+}
+sink(file = NULL, type="message")
+sink(file = NULL, type="output")
+# closeAllConnections() 
+Sys.time() - before
+
+# 4
+ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+# separate the layers of the median and CI
+X05 <- ov[,,2]
+Xlo <- ov[,,1]
+Xhi <- ov[,,3]
+
+# remove lower triangle of each (repeated values since it's a symetric matrix)
+X05[lower.tri(X05, diag = T)] <- NA
+Xlo[lower.tri(Xlo, diag = T)] <- NA
+Xhi[lower.tri(Xhi, diag = T)] <- NA
+
+
+# assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+rownames(X05) <- colnames(X05) <- gid
+rownames(Xlo) <- colnames(Xlo) <- gid
+rownames(Xhi) <- colnames(Xhi) <- gid
+
+# median
+WI05 <- NULL
+BW05 <- NULL
+
+# BW lower and higher CI bounds
+BWlo <- NULL
+BWhi <- NULL
+
+for (i in seq_along(rownames(X05))) {
+  # i = 2
+  
+  # medians
+  x1 <- X05[i,] 
+  x2 <- x1[which(names(x1) == rownames(X05)[i])]
+  x3 <- x1[which(names(x1) != rownames(X05)[i])]
+  
+  WI05 <- c(WI05, x2)
+  BW05 <- c(BW05, x3)
+  
+  # BW intervals
+  y1 <- Xlo[i,] 
+  y2 <- y1[which(names(y1) != rownames(Xlo)[i])]
+  BWlo <- c(BWlo, y2)
+  
+  z1 <- Xhi[i,] 
+  z2 <- z1[which(names(z1) != rownames(Xhi)[i])]
+  BWhi <- c(BWhi, z2)
+  
+}
+
+# remove NAs
+WI05 <- WI05[!is.na(WI05)]
+BW05 <- BW05[!is.na(BW05)]
+BWlo <- BWlo[!is.na(BWlo)]
+BWhi <- BWhi[!is.na(BWhi)]
+
+# organize values in a dataframe for plotting
+Overlaps <- data.frame(
+  Overlap = c(WI05, BW05),
+  Type = c(rep("Within", length(WI05)), rep("Between", length(BW05)))
+)
+
+plotFull <- ggplot(data = Overlaps) + 
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
+  ggtitle("Full dataset") +
+  theme_bw()
+
+WI_median <- quantile(WI05, 0.5)
+
+BWint <- data.frame(Low = BWlo,
+                    High = BWhi)
+
+BWint <- BWint %>% 
+  mutate(Contains = "NA") %>% 
+  mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+proportions_wide1 <- spread(proportions, WI_Median_Position, Percentage)
+write.csv(proportions_wide1, file = "proportions_wide1.csv", row.names = F)
+```
+
+## With the same dataset but subset just one every 5 positions
+
+```{r samplingFreq test2, cache = TRUE, message = FALSE, warning = FALSE, eval = FALSE}
+
+# turn to sf for easy subsetting and subset
+
+sim_5th <- st_as_sf(simulated_dataset) %>%
+  slice(which(row_number() %% 5 == 1))
+
+sim_5th <- as_Spatial(sim_5th)
+
+sds <- as.data.frame(sim_5th)
+
+sds %>%
+  dplyr::group_by(TrackID) %>%
+  dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'),
+                                length.out = 20)) %>%
+  mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>%
+  dplyr::select(individual.local.identifier = TrackID,
+                Longitude = coords.x1, Latitude = coords.x2,
+                datetime = Date_Time) %>%
+  ungroup() -> sds
+
+sds <- as.data.frame(sds)
+
+message_filename = "output_5thds.txt"
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+
+# 1
+sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+
+FIT.list <- list()
+
+before <- Sys.time()
+for(i in 1:length(sd_tel)){
+  # print(i)
+  one <- sd_tel[[i]]
+  # 2
+  GUESS <- ctmm.guess(one, interactive=F)
+  # 3
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
+  # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+  FIT.list[[i]] <- FITS[[1]]
+}
+sink(file = NULL, type="message")
+sink(file = NULL, type="output")
+# closeAllConnections()
+Sys.time() - before
+
+# 4
+ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+# separate the layers of the median and CI
+X05 <- ov[,,2]
+Xlo <- ov[,,1]
+Xhi <- ov[,,3]
+
+# remove lower triangle of each (repeated values since it's a symetric matrix)
+X05[lower.tri(X05, diag = T)] <- NA
+Xlo[lower.tri(Xlo, diag = T)] <- NA
+Xhi[lower.tri(Xhi, diag = T)] <- NA
+
+
+# assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+rownames(X05) <- colnames(X05) <- gid
+rownames(Xlo) <- colnames(Xlo) <- gid
+rownames(Xhi) <- colnames(Xhi) <- gid
+
+# median
+WI05 <- NULL
+BW05 <- NULL
+
+# BW lower and higher CI bounds
+BWlo <- NULL
+BWhi <- NULL
+
+for (i in seq_along(rownames(X05))) {
+  # i = 2
+
+  # medians
+  x1 <- X05[i,]
+  x2 <- x1[which(names(x1) == rownames(X05)[i])]
+  x3 <- x1[which(names(x1) != rownames(X05)[i])]
+
+  WI05 <- c(WI05, x2)
+  BW05 <- c(BW05, x3)
+
+  # BW intervals
+  y1 <- Xlo[i,]
+  y2 <- y1[which(names(y1) != rownames(Xlo)[i])]
+  BWlo <- c(BWlo, y2)
+
+  z1 <- Xhi[i,]
+  z2 <- z1[which(names(z1) != rownames(Xhi)[i])]
+  BWhi <- c(BWhi, z2)
+
+}
+
+# remove NAs
+WI05 <- WI05[!is.na(WI05)]
+BW05 <- BW05[!is.na(BW05)]
+BWlo <- BWlo[!is.na(BWlo)]
+BWhi <- BWhi[!is.na(BWhi)]
+
+# organize values in a dataframe for plotting
+Overlaps <- data.frame(
+  Overlap = c(WI05, BW05),
+  Type = c(rep("Within", length(WI05)), rep("Between", length(BW05)))
+)
+
+plot1 <- ggplot(data = Overlaps) +
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) +
+  ggtitle("Every 5th position") +
+  theme_bw()
+
+WI_median <- quantile(WI05, 0.5)
+
+BWint <- data.frame(Low = BWlo,
+                    High = BWhi)
+
+BWint <- BWint %>%
+    mutate(Contains = "NA") %>%
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+proportions_wide2 <- spread(proportions, WI_Median_Position, Percentage)
+write.csv(proportions_wide2, file = "proportions_wide2.csv", row.names = F)
+```
+
+## With the same dataset but subset just one every 10 positions
+
+```{r samplingFreq test3, cache = TRUE, message = FALSE, warning = FALSE, eval = FALSE}
+# turn to sf for easy subsetting and subset
+
+sim_10th <- st_as_sf(simulated_dataset) %>%
+  slice(which(row_number() %% 10 == 1))
+
+sim_10th <- as_Spatial(sim_10th)
+
+sds <- as.data.frame(sim_10th)
+
+sds %>%
+  dplyr::group_by(TrackID) %>%
+  dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'),
+                                length.out = 10)) %>%
+  mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>%
+  dplyr::select(individual.local.identifier = TrackID,
+                Longitude = coords.x1, Latitude = coords.x2,
+                datetime = Date_Time) %>%
+  ungroup() -> sds
+
+sds <- as.data.frame(sds)
+
+message_filename = "output_10thds.txt"
+try(message_file <- file(message_filename, open="at")) # open file for appending in text mode
+sink(message_file, type="message")
+sink(message_file, type="output")
+sd_tel <- as.telemetry(object = sds, timeformat = "%Y/%m/%d %H:%M:%S")
+
+FIT.list <- list()
+
+before <- Sys.time()
+for(i in 1:length(sd_tel)){
+  # print(i)
+  one <- sd_tel[[i]]
+  # 2
+  GUESS <- ctmm.guess(one, interactive=F)
+  # 3
+  FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
+  # print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
+  FIT.list[[i]] <- FITS[[1]]
+}
+sink(file = NULL, type="message")
+sink(file = NULL, type="output")
+# closeAllConnections()
+Sys.time() - before
+
+# 4
+ov <- ctmm::overlap(FIT.list, level = 0.95)
+
+# separate the layers of the median and CI
+X05 <- ov[,,2]
+Xlo <- ov[,,1]
+Xhi <- ov[,,3]
+
+# remove lower triangle of each (repeated values since it's a symetric matrix)
+X05[lower.tri(X05, diag = T)] <- NA
+Xlo[lower.tri(Xlo, diag = T)] <- NA
+Xhi[lower.tri(Xhi, diag = T)] <- NA
+
+
+# assign value of BirdID that we rescue from the simulated_dataset df to rows and columns
+gid <- simulated_dataset@data[!duplicated(simulated_dataset@data[, "TrackID"]), ][["BirdID"]]
+rownames(X05) <- colnames(X05) <- gid
+rownames(Xlo) <- colnames(Xlo) <- gid
+rownames(Xhi) <- colnames(Xhi) <- gid
+
+# median
+WI05 <- NULL
+BW05 <- NULL
+
+# BW lower and higher CI bounds
+BWlo <- NULL
+BWhi <- NULL
+
+for (i in seq_along(rownames(X05))) {
+  # i = 2
+
+  # medians
+  x1 <- X05[i,]
+  x2 <- x1[which(names(x1) == rownames(X05)[i])]
+  x3 <- x1[which(names(x1) != rownames(X05)[i])]
+
+  WI05 <- c(WI05, x2)
+  BW05 <- c(BW05, x3)
+
+  # BW intervals
+  y1 <- Xlo[i,]
+  y2 <- y1[which(names(y1) != rownames(Xlo)[i])]
+  BWlo <- c(BWlo, y2)
+
+  z1 <- Xhi[i,]
+  z2 <- z1[which(names(z1) != rownames(Xhi)[i])]
+  BWhi <- c(BWhi, z2)
+
+}
+
+# remove NAs
+WI05 <- WI05[!is.na(WI05)]
+BW05 <- BW05[!is.na(BW05)]
+BWlo <- BWlo[!is.na(BWlo)]
+BWhi <- BWhi[!is.na(BWhi)]
+
+# organize values in a dataframe for plotting
+Overlaps <- data.frame(
+  Overlap = c(WI05, BW05),
+  Type = c(rep("Within", length(WI05)), rep("Between", length(BW05)))
+)
+
+plot2 <- ggplot(data = Overlaps) +
+  geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) +
+  ggtitle("Every 10th position") +
+  theme_bw()
+
+WI_median <- quantile(WI05, 0.5)
+
+BWint <- data.frame(Low = BWlo,
+                    High = BWhi)
+
+BWint <- BWint %>%
+    mutate(Contains = "NA") %>%
+    mutate(Contains = if_else(High > WI_median, "NotAbove", "Above (WBR)"))
+
+proportions <- as.data.frame(prop.table(table(BWint$Contains)))
+
+names(proportions) <- c("WI_Median_Position", "Percentage")
+proportions$Percentage <- round(proportions$Percentage*100, 2)
+
+proportions_wide3 <- spread(proportions, WI_Median_Position, Percentage)
+write.csv(proportions_wide3, file = "proportions_wide3.csv", row.names = F)
+```
+
+## Compare the results
+
+```{r samplingFreq compare, message = FALSE, warning = FALSE, fig.width = 12, fig.height = 12}
+prop_files <- list.files(pattern = "proportions_wide")
+prop_list <- map(prop_files, read.csv)
+
+final_df <- bind_rows(prop_list)
+
+final_df$Test <- c("original", "every 5th", "every 10th")
+
+final_df %>%
+  dplyr::select("Test", "Above (WBR)" = "Above..WBR.", "NotAbove") %>% 
+  kable(digits = 2, align = "rrrr", caption = "Test sampling frequency") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+
+Either with one 5th or with one 10th of the locations, the function is still able to detect individual site fidelity as well as the full dataset. This demonstrates the function is robust to different sampling frequencies as well.
