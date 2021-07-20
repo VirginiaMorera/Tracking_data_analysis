@@ -1,6 +1,8 @@
+# Developed for the manuscript *Detecting recurrent sources of variability in animal tracking studies* by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021.
+
 #### simulate distribution ####
 
-# Tracks must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
+# tracks must be a data frame or SPDF with at least Longitude and Latitude (not projected), Sp and Colony fields
 # populationInfo must be a data frame with at least Colony, Sp and Pairs
 # scale is the smoothing factor to be used in the Kernel Density Estimation (in Km)
 # grid is a number giving the size of the grid on which the UD should be estimated. 
@@ -10,11 +12,21 @@
 simulateDistribution <- function(tracks, populationInfo, scale, grid = 500, multiFactor = 5){
   
   # tracks <- colony_boot_list[[2]] #this can be used for testing if something goes wrong
-  require(adehabitatHR)
-  require(sp)
-  require(spatstat, quietly = T)
-  require(geosphere)
+  # package dependencies
+  if (!requireNamespace("adehabitatHR", quietly = TRUE)) {
+    stop("Package \"adehabitatHR\" needed for  function to work. Please install.",
+         call. = FALSE)  }
+  if (!requireNamespace("sp", quietly = TRUE)) {
+    stop("Package \"sp\" needed for  function to work. Please install.",
+         call. = FALSE)  }
+  if (!requireNamespace("spatstat", quietly = TRUE)) {
+    stop("Package \"spatstat\" needed for  function to work. Please install.",
+         call. = FALSE)  }
+  if (!requireNamespace("geosphere", quietly = TRUE)) {
+    stop("Package \"geosphere\" needed for  function to work. Please install.",
+         call. = FALSE)  }
   
+  # initial checks
   if (!"Latitude" %in% names(tracks)) stop("Latitude field does not exist")
   if (!"Longitude" %in% names(tracks)) stop("Longitude field does not exist")
   if (!"Species" %in% names(tracks)) stop("Species field does not exist")
