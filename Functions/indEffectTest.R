@@ -1,10 +1,12 @@
+# Developed for the manuscript *Detecting recurrent sources of variability in animal tracking studies* by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021.
+
 ## indEfectTest 
 
 #tracks: dataframe containing, at least,  latitude, longitude, trip ID, group ID and Date Time fields
 #      : datetime field must be called Date_Time and be in ymd_HMS format
 #      : latitude field must be called Latitude
 #      : longitude field must be called Longitude
-#      : the names of the trip and group identifier variables are specified in the arguments "tripID" and "groupID"
+#      : the names of the trip and group identifier variables are specified in the arguments "tripID" and "groupVar"
 
 # plotIT: logical, if TRUE, a density plot of the within- and between-group median overlaps will be produced. 
 # debias: logical, if TRUE debiased estimators of the BA will be produced. 
