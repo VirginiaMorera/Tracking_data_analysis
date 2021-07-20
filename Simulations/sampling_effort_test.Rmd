@@ -7,7 +7,7 @@ output: html_document
 
 ## Different sampling effort test
 
-Testing the ability of the IndEffectTest function to detect ISF when different individuals have different ammounts of data. The test was developed for the *Detecting recurrent sources of variability in animal tracking studies* manuscript by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021
+Testing the ability of the indEffectTest() function to detect ISF when different individuals have different ammounts of data. The test was developed for the *Detecting recurrent sources of variability in animal tracking studies* manuscript by Virginia Morera-Pujol *et al.* submitted to Ecological Applications in 2021
 
 ### Description
 
@@ -34,24 +34,19 @@ Here, we generate 9 different datasets of a hundred tracks of a hundred position
 -   10:10:10:10:10:10:10:10:10:10
 
 ```{r setup, include = F}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
-                      fig.width = 12, fig.height = 8)
-knitr::opts_knit$set(root.dir = "C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
-
-# setwd("C:/Users/Virginia/Dropbox/Virginia/GLS_multi/PowerTest")
-
-pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm,
-               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv)
-  
+knitr::opts_knit$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
+                     cache = TRUE, fig.width = 12, fig.height = 8)
+install.packages("pacman", repos = "http://cran.us.r-project.org")
+pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm, doParallel, foreach, ggpubr,
+               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv, kableExtra)
 '%!in%' <- function(x,y)!('%in%'(x,y))
-
 ```
 
 We will generate the different simulated datasets following the instructions specified in the [Demo vignette](https://rpubs.com/V_Morera-Pujol/Demo_simulating_tracks), so the different steps are not explained here again, just shown.
 
-#### In a first step we generate the templates
+## Generate the templates
 
-```{r, message = FALSE, warning = FALSE}
+```{r samplingEffort gen, message = FALSE, warning = FALSE}
 CRW <- species(state.CRW(0.4))
 set.seed(1234)
 test <- simulate(CRW, coords = c(0, 0), time = 100)
@@ -79,8 +74,6 @@ for (i in 1:10) {
                        coords = c(origin_points[i,1], origin_points[i, 2]), 
                        time = 100)
   template_tracks[i] <- list(template)
-  # lines(template, col = brewer.pal(10,"Set3")[i])
-  # points(template, col = brewer.pal(10,"Set3")[i], pch = 16)
   spTemplate <- SpatialPoints(coords = template[,1:2], proj4string = baseGrid@proj4string)
   KDE <- kernelUD(spTemplate, h = "href", grid = baseGrid) 
   UD50 <- getverticeshr(KDE, percent = 50)
@@ -88,16 +81,21 @@ for (i in 1:10) {
 }
 ```
 
-### Generating data and running the function
+## Generate the data and run the function
 
 We generate the simulated datasets and run the IndEffectTest functin steps inside a loop for all the specified unbalanced datasets. We will simulate a high ISF, with a resistance value of 1 outside the "allowed" area.
 
-```{r, cache = TRUE, message = FALSE, warning = FALSE}
+```{r samplingEffort run, cache = TRUE, message = FALSE, warning = FALSE, eval = FALSE}
 repeated_birds <- c(1:9) 
 
-list_of_results <- list()
 plotlist <- list()
-for(j in repeated_birds) {
+
+cl <- makeCluster(10, type="PSOCK") ## specify number of cores, and type of cluster (PSOCK or FORK)
+registerDoParallel(cl) ## register the backend into a virtual node
+# results_list <- list()
+## Execute parallel operation
+
+foreach(j = 1:9, .packages=c("dplyr", "ctmm", "ggplot2", "lubridate", "SiMRiv", "tidyr", "sp")) %dopar% {
   # j = 1
   cat(j, "repeated bird(s) \n")
   set.seed(j)
@@ -113,7 +111,6 @@ for(j in repeated_birds) {
     # i = 3
     res_surface <- resistanceFromShape(template_UDs[[i]], baseRaster = baseRaster, 
                                        field = 0, background = 1)
-    # plot(res_surface)
     sim_tracks <- simulate(splist, 
                            start.resistance	= 0,
                            time = 100, resist = res_surface)
@@ -147,25 +144,21 @@ for(j in repeated_birds) {
       arrange(trackID, posID)
     
     spSim <- SpatialPointsDataFrame(coords = sim_tracks2[,3:4], 
-                                    data = data.frame(TrackID = paste(rep(i, nrow(sim_tracks2)), 
-                                                                      sim_tracks2$trackID, sep = "_"),
+                                    data = data.frame(TrackID = paste(rep(i,
+                                                                          nrow(sim_tracks2)), 
+                                                                      sim_tracks2$trackID, 
+                                                                      sep = "_"),
                                                       BirdID = rep(i, nrow(sim_tracks2))))
     spSim@proj4string <- baseGrid@proj4string
     simulated_tracks[i] <- list(spSim)
     spSim$BirdID <- NULL
-    # KUD_sim <- kernelUD(spSim, grid = baseGrid)
-    # print(mean(kerneloverlap(spSim, method = "BA", percent = 50, conditional = T)))
-    # sp::plot(spSim, col = factor(spSim$TrackID), pch = 20, cex = 0.5)
-  }  
+   }  
   
   y <- 1:10
-  
-  
   
   for (i in y[-x]) {
     res_surface <- resistanceFromShape(template_UDs[[i]], baseRaster = baseRaster, 
                                        field = 0, background = 0.5)
-    # plot(res_surface)
     sim_tracks <- simulate(xlist, 
                            
                            start.resistance	= 0,
@@ -180,7 +173,6 @@ for(j in repeated_birds) {
     spSim@proj4string <- baseGrid@proj4string
     simulated_tracks[i] <- list(spSim)
     spSim$BirdID <- NULL
-    # KUD_sim <- kernelUD(spSim, grid = baseGrid)
   }
   
   list.df <- lapply(seq_along(simulated_tracks),
@@ -202,7 +194,8 @@ for(j in repeated_birds) {
   
   sds <- sds %>% 
     dplyr::group_by(TrackID) %>%
-    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), ymd_hms('2020-01-30 12:10:00'), 
+    dplyr::mutate(Date_Time = seq(ymd_hms('2019-11-30 12:10:00'), 
+                                  ymd_hms('2020-01-30 12:10:00'), 
                                   length.out = n())) %>% 
     mutate(Date_Time = format(Date_Time, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")) %>% 
     dplyr::select(TrackID, 
@@ -229,7 +222,7 @@ for(j in repeated_birds) {
     # 2
     GUESS <- ctmm.guess(one, interactive=F)
     # 3
-    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=-1)
+    FITS <- ctmm.select(one, GUESS,  trace=TRUE, verbose=TRUE, cores=0)
     print(paste("The selected model for", names(sd_tel)[i], "is", names(FITS)[1], sep = " "))
     FIT.list[[i]] <- FITS[[1]]
   }
@@ -241,9 +234,9 @@ for(j in repeated_birds) {
   
   # 4
   ov <- ctmm::overlap(FIT.list, level = 0.95)
-  # save(FIT.list, ov, file = paste("powerTest". j, ".RDS"))
-  
-  # we select the "middle layer" of the array which contains the point estimate (for now ignoring the CI)
+
+  # we select the "middle layer" of the array which contains the point estimate 
+  # (for now ignoring the CI)
   X05 <- ov[,,2]
   Xlo <- ov[,,1]
   Xhi <- ov[,,3]
@@ -314,7 +307,7 @@ for(j in repeated_birds) {
   
   plot1 <- ggplot(data = Overlaps) + 
     geom_density(aes(x = Overlap, col = Type, fill = Type), alpha = 0.5) + 
-    ggtitle("Density of within individual vs. between individual median overlaps") +
+    ggtitle(paste(j, " repeated birds")) +
     theme_bw()
   
   Result1[3] <- list(plot1)
@@ -338,21 +331,35 @@ for(j in repeated_birds) {
   
   Result1[4] <- list(proportions_wide)
   
-  list_of_results[j] <- list(Result1)
+  #list_of_results[j] <- list(Result1)
   plotlist[j] <- list(plot1)
+  saveRDS(Result1, file = paste0(j, "_repeated_birds.RDS"))
 }
 ```
 
-### Compare results
+## Compare results
 
-```{r, cache = TRUE, message = FALSE, warning = FALSE, fig.height = 12, fig.width = 12}
-grid.arrange(
-  grobs = plotlist,
-  layout_matrix = rbind(c(1, 2, 3),
-                        c(4, 5, 6),
-                        c(7, 8, 9))
-)
+```{r samplingEffort compare, cache = TRUE, message = FALSE, warning = FALSE, fig.height = 12, fig.width = 12}
+rdslist <- list.files(pattern = "repeated_birds.RDS")
 
+list_of_results <- list()
+for (i in seq_along(rdslist)) {
+  res <- readRDS(rdslist[i])
+  list_of_results[[i]] <- res
+}
+
+final_df <- dplyr::bind_rows(
+  list_of_results[[1]][[4]], list_of_results[[2]][[4]], list_of_results[[3]][[4]], list_of_results[[4]][[4]], 
+  list_of_results[[5]][[4]], list_of_results[[6]][[4]], list_of_results[[7]][[4]], list_of_results[[9]][[4]], 
+  list_of_results[[9]][[4]])
+
+final_df$Test <- paste(seq(1, 9), "repeated birds")
+
+final_df %>% 
+  dplyr::select("Test", "Above (WBR)", "NotAbove") %>% 
+  kable(digits = 2, align = "rrrr", caption = "Test sampling unbalance") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
 ```
 
 Whether there's a strong unbalance (1 individual repeatedly sampled and the rest only sampled once) or data are more even (9 individuals repeatedly sampled, only one sampled only once), the function is able to detect individual site fidelity
+
