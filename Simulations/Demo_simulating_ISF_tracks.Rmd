@@ -1,9 +1,10 @@
 ---
-output:
-  html_document: default
-  word_document: default
-  pdf_document: default
+title: "Simulating tracks with ISF"
+author: "Morera-Pujol, Virginia"
+date: "July 2021"
+output: html_document
 ---
+
 # Simulating individual site fidelity
 
 ## For the MS "Detecting recurrent sources of variability in animal tracking studies"
