@@ -32,6 +32,9 @@ bootstrapColony <- function(tracks, simulatedDistributions, tripId, udLev = 50, 
    if (!requireNamespace("parallel", quietly = TRUE)) {
     stop("Package \"parallel\" needed for  function to work. Please install.",
          call. = FALSE)  }
+   if (!requireNamespace("foreach", quietly = TRUE)) {
+    stop("Package \"foreach\" needed for  function to work. Please install.",
+         call. = FALSE)  }
   
   # initial checks
   tracks$tripId <- tracks[,tripId]
