@@ -17,8 +17,8 @@ In this document I'll generate, using the package `SIMRiv`, simulated animal mov
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE, 
                       fig.width = 12, fig.height = 8)
 knitr::opts_knit$set(root.dir = "C:/Users/Virginia/Dropbox/Virginia/GLS_multi/scripts")
-# setwd("D:/Dropbox/Virginia/GLS_multi")
-# setwd("C:/Users/Virginia/Dropbox/Virginia/GLS_multi")
+## Change working directory in previous line to the path to your project/working folder
+
 
 pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm,
                geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv)
