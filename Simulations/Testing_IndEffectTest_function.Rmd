@@ -21,7 +21,7 @@ knitr::opts_knit$set(echo = TRUE, message = FALSE, warning = FALSE, tidy = TRUE,
 
 install.packages("pacman", repos = "http://cran.us.r-project.org")
 pacman::p_load(tidyverse, plyr, adehabitatHR, Matching, sf, ctmm, doParallel, foreach, ggpubr,
-               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv, kableExtra)
+               geosphere, RColorBrewer, gridExtra, lubridate, SiMRiv, kableExtra, proj4, sp)
 
 '%!in%' <- function(x,y)!('%in%'(x,y))
 ```
